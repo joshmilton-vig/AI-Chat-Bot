@@ -1,10 +1,17 @@
 // ai-chat-service/src/server.ts
 import "dotenv/config";
-import express, { type Request, type Response, type NextFunction } from "express";
+import express, {
+  type Request,
+  type Response,
+  type NextFunction,
+} from "express";
 import cors, { type CorsOptions } from "cors";
 import { RateLimiterMemory } from "rate-limiter-flexible";
 import { z } from "zod";
-import OpenAI, { type ChatCompletionMessageParam } from "openai";
+import OpenAI from "openai";
+
+// local message type (avoids SDK-internal types)
+type ChatMsg = { role: "system" | "user" | "assistant"; content: string };
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
@@ -13,14 +20,14 @@ app.use(express.json({ limit: "1mb" }));
 
 const allowlist = (process.env.ALLOWED_ORIGINS || "")
   .split(/[, \n\r\t]+/)
-  .map(s => s.trim())
+  .map((s) => s.trim())
   .filter(Boolean);
 
 function escapeRegex(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function originAllowed(origin: string): boolean {
-  return allowlist.some(pat => {
+  return allowlist.some((pat) => {
     // Support exact match or wildcard patterns like https://*.vivid-*.com
     if (pat.includes("*")) {
       const re = new RegExp(
@@ -68,32 +75,34 @@ const ChatSchema = z.object({
     )
     .min(1),
 });
+type ChatPayload = z.infer<typeof ChatSchema>;
 
 /* --------------------------------- OpenAI --------------------------------- */
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 app.post("/api/ai/chat", async (req: Request, res: Response) => {
   const parsed = ChatSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ error: "Bad request" });
-  }
-
-  if (!process.env.OPENAI_API_KEY) {
+  if (!parsed.success) return res.status(400).json({ error: "Bad request" });
+  if (!process.env.OPENAI_API_KEY)
     return res.status(500).json({ error: "LLM key not configured" });
-  }
 
-  const { business, messages } = parsed.data;
+  const { business, messages } = parsed.data as ChatPayload;
 
   const brandContext = getBrandContext(business);
 
-  // Build the final chat history (cap to last N to control token usage)
-  const chatMessages: ChatCompletionMessageParam[] = [
-    { role: "system", content: brandContext },
-    ...messages.map(m => ({ role: m.role, content: m.content })),
-  ].slice(-20);
+  // Build messages without inference issues
+  const maxHistory = 20;
+  const chatMessages: ChatMsg[] = [{ role: "system", content: brandContext }];
+  for (const m of messages) {
+    chatMessages.push({ role: m.role as ChatMsg["role"], content: m.content });
+  }
+  // Keep the last (maxHistory - 0) entries while preserving the system message at the front
+  if (chatMessages.length > maxHistory) {
+    const system = chatMessages[0];
+    const tail = chatMessages.slice(-(maxHistory - 1));
+    chatMessages.splice(0, chatMessages.length, system, ...tail);
+  }
 
   try {
     const completion = await openai.chat.completions.create({
@@ -139,7 +148,10 @@ function getBrandContext(business: string) {
         common
       );
     default:
-      return "You are the assistant for a Vivid Ink storefront. Be helpful and concise." + common;
+      return (
+        "You are the assistant for a Vivid Ink storefront. Be helpful and concise." +
+        common
+      );
   }
 }
 
