@@ -54,15 +54,21 @@ app.disable("x-powered-by");
 app.use(morgan(NODE_ENV === "production" ? "combined" : "dev"));
 app.use(express.json({ limit: "1mb" }));
 
-app.use(
-  cors({
-    credentials: true,
-    origin: (origin, cb) => {
-      if (isOriginAllowed(origin)) cb(null, true);
-      else cb(new Error("Not allowed by CORS"));
-    },
-  })
-);
+// ----- CORS (global + explicit preflight) -----
+const corsOptions: cors.CorsOptions = {
+  credentials: true,
+  origin: (origin, cb) => {
+    if (isOriginAllowed(origin)) cb(null, true);
+    else cb(new Error("Not allowed by CORS"));
+  },
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  maxAge: 86400, // cache preflight for a day
+};
+
+app.use(cors(corsOptions));
+// Important: handle preflight explicitly so OPTIONS gets a 204 with CORS headers
+app.options("*", cors(corsOptions));
 
 // Handle CORS errors as JSON
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {
@@ -73,86 +79,97 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
 });
 
 // ---------- Routes ----------
+app.get("/api/health", (_req, res) => {
+  // Good cache hygiene with CORS
+  res.set("Vary", "Origin").set("Cache-Control", "no-store").json({ ok: true });
+});
+
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
 
-app.post("/api/ai/chat", async (req: Request, res: Response) => {
-  try {
-    // Business selection
-    const businessKey = String(req.body?.business || "vivid").toLowerCase();
-    const biz = BUSINESSES[businessKey] ?? BUSINESSES.vivid;
+app.post(
+  "/api/ai/chat",
+  cors(corsOptions),
+  async (req: Request, res: Response) => {
+    try {
+      // Business selection
+      const businessKey = String(req.body?.business || "vivid").toLowerCase();
+      const biz = BUSINESSES[businessKey] ?? BUSINESSES.vivid;
 
-    // Sanitize messages
-    const raw = Array.isArray(req.body?.messages) ? req.body.messages : [];
-    const history: ChatMsg[] = raw
-      .map((m: any) => {
-        const role: ChatMsg["role"] =
-          m?.role === "system" || m?.role === "assistant" || m?.role === "user"
-            ? m.role
-            : "user";
-        const content = String(m?.content ?? "").trim();
-        return { role, content };
-      })
-      .filter((m: ChatMsg) => m.content.length > 0)
-      .slice(-30);
+      // Sanitize messages
+      const raw = Array.isArray(req.body?.messages) ? req.body.messages : [];
+      const history: ChatMsg[] = raw
+        .map((m: any) => {
+          const role: ChatMsg["role"] =
+            m?.role === "system" ||
+            m?.role === "assistant" ||
+            m?.role === "user"
+              ? m.role
+              : "user";
+          const content = String(m?.content ?? "").trim();
+          return { role, content };
+        })
+        .filter((m: ChatMsg) => m.content.length > 0)
+        .slice(-30);
 
-    const lastUser =
-      [...history].reverse().find((m) => m.role === "user")?.content || "";
+      const lastUser =
+        [...history].reverse().find((m) => m.role === "user")?.content || "";
 
-    // 1) CANNED FAST PATH
-    const canned = cannedReply(biz, lastUser);
-    if (canned) return res.json({ message: canned });
+      // 1) CANNED FAST PATH
+      const canned = cannedReply(biz, lastUser);
+      if (canned) return res.json({ message: canned });
 
-    // 2) LLM FALLBACK
-    if (!OPENAI_API_KEY) {
-      return res
-        .status(500)
-        .json({ error: "LLM upstream failed", detail: "Missing API key" });
+      // 2) LLM FALLBACK
+      if (!OPENAI_API_KEY) {
+        return res
+          .status(500)
+          .json({ error: "LLM upstream failed", detail: "Missing API key" });
+      }
+
+      const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+
+      const systemPrompt = [
+        `You are a friendly, concise assistant for ${biz.name}.`,
+        `Never invent policies. Use ONLY the business info provided below.`,
+        `If unsure, ask a brief follow-up or offer to connect to a human at ${biz.email} or ${biz.phone}.`,
+        `Business profile:`,
+        `- Timezone: ${biz.timezone}`,
+        `- Hours: ${Object.entries(biz.hours)
+          .map(([d, h]) => `${d}:${h ? `${h.open}-${h.close}` : "closed"}`)
+          .join(", ")}`,
+        `- Shipping: ${biz.shippingPolicy}`,
+        `- Returns: ${biz.returnPolicy}`,
+        biz.faq && Object.keys(biz.faq).length
+          ? `- FAQ keys: ${Object.keys(biz.faq).join(", ")}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      const llmMessages: ChatMsg[] = [
+        { role: "system", content: systemPrompt },
+        ...history.filter((m) => m.role !== "system"),
+      ];
+
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: llmMessages,
+        temperature: 0.3,
+      });
+
+      const reply =
+        completion.choices?.[0]?.message?.content?.trim() ||
+        "Sorry — I couldn’t find that.";
+      return res.json({ message: reply });
+    } catch (err: any) {
+      const detail =
+        err?.response?.data ??
+        err?.message ??
+        (typeof err === "string" ? err : undefined);
+      console.error("Chat error:", detail || err);
+      return res.status(500).json({ error: "LLM upstream failed" });
     }
-
-    const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
-
-    const systemPrompt = [
-      `You are a friendly, concise assistant for ${biz.name}.`,
-      `Never invent policies. Use ONLY the business info provided below.`,
-      `If unsure, ask a brief follow-up or offer to connect to a human at ${biz.email} or ${biz.phone}.`,
-      `Business profile:`,
-      `- Timezone: ${biz.timezone}`,
-      `- Hours: ${Object.entries(biz.hours)
-        .map(([d, h]) => `${d}:${h ? `${h.open}-${h.close}` : "closed"}`)
-        .join(", ")}`,
-      `- Shipping: ${biz.shippingPolicy}`,
-      `- Returns: ${biz.returnPolicy}`,
-      biz.faq && Object.keys(biz.faq).length
-        ? `- FAQ keys: ${Object.keys(biz.faq).join(", ")}`
-        : "",
-    ]
-      .filter(Boolean)
-      .join("\n");
-
-    const llmMessages: ChatMsg[] = [
-      { role: "system", content: systemPrompt },
-      ...history.filter((m) => m.role !== "system"),
-    ];
-
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: llmMessages,
-      temperature: 0.3,
-    });
-
-    const reply =
-      completion.choices?.[0]?.message?.content?.trim() ||
-      "Sorry — I couldn’t find that.";
-    return res.json({ message: reply });
-  } catch (err: any) {
-    const detail =
-      err?.response?.data ??
-      err?.message ??
-      (typeof err === "string" ? err : undefined);
-    console.error("Chat error:", detail || err);
-    return res.status(500).json({ error: "LLM upstream failed" });
   }
-});
+);
 
 // ---------- Start ----------
 app.listen(PORT, () => {
