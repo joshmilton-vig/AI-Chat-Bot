@@ -4,6 +4,8 @@ import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import morgan from "morgan";
 import OpenAI from "openai";
+import path from "path";
+import { fileURLToPath } from "url";
 
 import { BUSINESSES } from "./data/businesses";
 import { cannedReply } from "./logic/canned";
@@ -13,6 +15,13 @@ const PORT = Number(process.env.PORT || 8089);
 const NODE_ENV = process.env.NODE_ENV || "development";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 
+/**
+ * Comma/space separated allow-list.
+ * Examples:
+ *   ALLOWED_ORIGINS="https://assistant.vivid-think.com,https://storefront.printreach.com"
+ *   ALLOWED_ORIGINS="https://*.vivid-think.com"
+ *   ALLOWED_ORIGINS="*"
+ */
 const ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || "")
   .split(/[,\s]+/)
   .map((s) => s.trim())
@@ -24,7 +33,7 @@ export type ChatMsg = {
   content: string;
 };
 
-// ---------- Helpers ----------
+// ---------- Helpers (CORS) ----------
 function escapeRegex(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -36,13 +45,15 @@ function wildcardToRegex(pattern: string) {
 const originRegexes = ALLOWED_ORIGINS.map(wildcardToRegex);
 
 function isOriginAllowed(origin: string | undefined): boolean {
-  if (!origin) return true; // allow non-CORS requests (curl, same-origin)
+  // Allow non-CORS requests (same-origin, curl)
+  if (!origin) return true;
   try {
     const u = new URL(origin);
     const normalized = `${u.protocol}//${u.host}`;
-    return originRegexes.length === 0
-      ? true
-      : originRegexes.some((rx) => rx.test(normalized));
+    if (originRegexes.length === 0) return true; // no list = allow all
+    // If '*' present anywhere in list, allow all
+    if (ALLOWED_ORIGINS.includes("*")) return true;
+    return originRegexes.some((rx) => rx.test(normalized));
   } catch {
     return false;
   }
@@ -51,7 +62,11 @@ function isOriginAllowed(origin: string | undefined): boolean {
 // ---------- App ----------
 const app = express();
 app.disable("x-powered-by");
+
+// Log early (before other middleware)
 app.use(morgan(NODE_ENV === "production" ? "combined" : "dev"));
+
+// JSON body parsing
 app.use(express.json({ limit: "1mb" }));
 
 // ----- CORS (global + explicit preflight) -----
@@ -66,11 +81,17 @@ const corsOptions: cors.CorsOptions = {
   maxAge: 86400, // cache preflight for a day
 };
 
+app.use((req, res, next) => {
+  // help proxies/CDNs choose the right cached variant per Origin
+  res.setHeader("Vary", "Origin");
+  next();
+});
+
 app.use(cors(corsOptions));
-// Important: handle preflight explicitly so OPTIONS gets a 204 with CORS headers
+// Preflight (important to send headers even if no explicit route matches)
 app.options("*", cors(corsOptions));
 
-// Handle CORS errors as JSON
+// Handle CORS errors as JSON (must be before routes’ error handlers)
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   if (err && err.message === "Not allowed by CORS") {
     return res.status(403).json({ error: "CORS", origin: req.headers.origin });
@@ -78,14 +99,13 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   return next(err);
 });
 
-// ---------- Routes ----------
+// ---------- Health ----------
 app.get("/api/health", (_req, res) => {
-  // Good cache hygiene with CORS
-  res.set("Vary", "Origin").set("Cache-Control", "no-store").json({ ok: true });
+  res.set("Cache-Control", "no-store").json({ ok: true });
 });
-
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
 
+// ---------- Chat Route ----------
 app.post(
   "/api/ai/chat",
   cors(corsOptions),
@@ -171,24 +191,15 @@ app.post(
   }
 );
 
+// ---------- Serve widget bundle at /widget ----------
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+// At runtime dist/server.js sits in /dist, while the widget is in ../frontend/dist
+const widgetDir = path.join(__dirname, "../frontend/dist");
+console.log("[Vivid] Serving widget from:", widgetDir);
+app.use("/widget", express.static(widgetDir));
+
 // ---------- Start ----------
 app.listen(PORT, () => {
   console.log(`AI chat service listening on :${PORT}`);
 });
-
-// add with your other imports (top of file)
-import path from "path";
-import { fileURLToPath } from "url";
-
-// …after `const app = express();`
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// When running, dist/server.js lives in /dist, and the widget build goes to ../frontend/dist
-const widgetDir = path.join(__dirname, "../frontend/dist");
-
-// (Optional but helpful) log what we’re serving
-console.log("[Vivid] Serving widget from:", widgetDir);
-
-// Serve the widget at /widget
-app.use("/widget", express.static(widgetDir));
