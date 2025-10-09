@@ -175,3 +175,20 @@ app.post(
 app.listen(PORT, () => {
   console.log(`AI chat service listening on :${PORT}`);
 });
+
+// add with your other imports (top of file)
+import path from "path";
+import { fileURLToPath } from "url";
+
+// …after `const app = express();`
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// When running, dist/server.js lives in /dist, and the widget build goes to ../frontend/dist
+const widgetDir = path.join(__dirname, "../frontend/dist");
+
+// (Optional but helpful) log what we’re serving
+console.log("[Vivid] Serving widget from:", widgetDir);
+
+// Serve the widget at /widget
+app.use("/widget", express.static(widgetDir));
