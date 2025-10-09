@@ -369,6 +369,42 @@ export function initChatWidget(userOpts: Options = {}) {
       }, Math.max(0, opts.autoOpenDelay));
     }
   }
+
+  // ---- Smart clear only on real tab close (typed) ----
+  try {
+    const KEY = getStoreKey(opts.storageKey);
+    const SESSION_FLAG = "vivid_chat_active_session";
+    sessionStorage.setItem(SESSION_FLAG, "1");
+
+    function getNavType():
+      | "navigate"
+      | "reload"
+      | "back_forward"
+      | "prerender"
+      | undefined {
+      const nav = performance.getEntriesByType(
+        "navigation"
+      ) as PerformanceNavigationTiming[];
+      return nav[0]?.type;
+    }
+
+    // Clear only when we believe the tab is actually closing
+    window.addEventListener("pagehide", (ev) => {
+      // pagehide fires on reload and BFCache navigations too; keep history in those cases
+      const t = getNavType();
+      if (t === "reload" || t === "back_forward") return;
+
+      // If you want to ALSO keep history on same-tab navigations, keep this:
+      if (t === "navigate") return;
+
+      // Otherwise, treat as tab/window close
+      sessionStorage.removeItem(SESSION_FLAG);
+      localStorage.removeItem(KEY);
+    });
+  } catch (err) {
+    if (opts.debug) console.warn("Session cleanup logic failed:", err);
+  }
+
   // ---- Clear chat log on page close ----
   window.addEventListener("beforeunload", () => {
     try {
