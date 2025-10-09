@@ -8,7 +8,6 @@ export function mountVividChat(opts?: InitChatOptions) {
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", run, { once: true });
   } else {
-    // DOM is already ready (e.g., when called from console or after page load)
-    run();
+    run(); // DOM is already loaded
   }
 }
