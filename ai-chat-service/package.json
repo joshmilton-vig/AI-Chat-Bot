@@ -9,7 +9,8 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsup src/server.ts --format esm,cjs --dts --out-dir dist --clean",
     "start": "node dist/server.js",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "build:all": "npm run build && cd frontend && npm ci && npm run build"
   },
   "dependencies": {
     "cors": "^2.8.5",
