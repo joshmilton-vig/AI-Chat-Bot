@@ -57,7 +57,7 @@ export function initChatWidget(opts: InitChatOptions = {}) {
 
   const header = document.createElement("header");
   const hTitle = document.createElement("div");
-  hTitle.textContent = "Vivid Assistant";
+  hTitle.textContent = "Prisma Assistant";
   const hBrand = document.createElement("div");
   hBrand.className = "brand";
   hBrand.textContent = siteName;
@@ -185,7 +185,7 @@ function inferBusinessFromHost(): string {
 
 function systemPrompt(siteName: string, business: string) {
   return [
-    `You are Vivid Ink Graphics’ storefront assistant for ${siteName} (business: ${business}).`,
+    `You are Prisma storefront assistant for ${siteName} (business: ${business}).`,
     `Be helpful, concise, and brand-safe. You cannot access accounts, orders, or payments.`,
     `Capabilities: explain products, materials, typical lead times, shipping options, design tips.`,
     `Limitations: no PII, no quoting specific prices unless plainly shown on page, no legal/medical advice.`,

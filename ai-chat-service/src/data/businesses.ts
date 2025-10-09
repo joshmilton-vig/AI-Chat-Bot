@@ -14,11 +14,11 @@ export type BusinessProfile = {
 
 export const BUSINESSES: Record<string, BusinessProfile> = {
   vivid: {
-    key: "vivid",
-    name: "Vivid",
+    key: "prisma",
+    name: "Prisma",
     timezone: "America/Chicago",
     phone: "(225) 751-7297",
-    email: "sales@vividink.com",
+    email: "salesbr@poweredbyprisma.com",
     hours: {
       mon: { open: "08:00", close: "17:00" },
       tue: { open: "08:00", close: "17:00" },
