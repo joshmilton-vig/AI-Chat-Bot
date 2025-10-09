@@ -5,50 +5,109 @@ const STYLE_TAG_ID = "vivid-chat-style";
 const WIDGET_ID = "vivid-chat-widget";
 const HOST_ID = "vivid-chat-host";
 
-// ---------- Shadow DOM host ----------
-let SHADOW: ShadowRoot | null = null;
+// ---- Extended options (non-breaking) ----
+type Theme = {
+  primary?: string; // main brand color (bubble, send button, user msg)
+  surface?: string; // panel/log background
+  text?: string; // default text color (panels)
+  assistantBubble?: string; // assistant bubble bg
+  userText?: string; // user bubble text color
+  headerBg?: string; // header background
+  headerText?: string; // header text color
+  bubbleColor?: string; // floating launcher bubble color
+};
+type ExtraOptions = {
+  title?: string; // header title
+  iconSVG?: string; // custom bubble icon SVG
+  welcomeMessage?: string; // assistant message on first open
+  welcomeOnce?: boolean; // show welcome only once (default true)
+  autoOpenDelay?: number; // ms; if provided, open after delay
+  autoOpenOnce?: boolean; // only auto-open on first visit (default true)
+  persist?: boolean; // keep chat history in localStorage (default true)
+  storageKey?: string; // localStorage key (default "vivid_chat_session")
+  theme?: Theme; // brand colors
+};
+type Options = InitChatOptions & ExtraOptions;
 
+// ---- Shadow host ----
+let SHADOW: ShadowRoot | null = null;
 function getHostAndShadow() {
   let host = document.getElementById(HOST_ID) as HTMLElement | null;
   if (!host) {
     host = document.createElement("div");
     host.id = HOST_ID;
-    // keep the host out of page layout and above everything
     host.style.position = "fixed";
     host.style.right = "0";
     host.style.bottom = "0";
-    host.style.zIndex = "2147483647"; // max z-index
+    host.style.zIndex = "2147483647";
     document.body.appendChild(host);
   }
   SHADOW = host.shadowRoot ?? host.attachShadow({ mode: "open" });
   return { host, shadow: SHADOW! };
 }
 
-// ---------- Styles (in Shadow DOM) ----------
-function injectStyles() {
+// ---- Styles (Shadow DOM, uses CSS vars for theme) ----
+function injectStyles(vars: Record<string, string>) {
   const { shadow } = getHostAndShadow();
-  if (shadow.getElementById(STYLE_TAG_ID)) return;
+  const prev = shadow.getElementById(STYLE_TAG_ID);
+  if (prev) prev.remove();
 
   const css = `
-  /* Small reset so host styles never bleed in */
   :host, :host * { box-sizing: border-box; }
   :host * { font-family: Verdana, Arial, sans-serif; }
 
+  :host {
+    --va-primary: ${vars["--va-primary"]};
+    --va-surface: ${vars["--va-surface"]};
+    --va-text: ${vars["--va-text"]};
+    --va-assistant-bubble: ${vars["--va-assistant-bubble"]};
+    --va-user-text: ${vars["--va-user-text"]};
+    --va-header-bg: ${vars["--va-header-bg"]};
+    --va-header-text: ${vars["--va-header-text"]};
+    --va-bubble: ${vars["--va-bubble"]};
+  }
+
   #${WIDGET_ID} { position: fixed; z-index: 2147483647; right: 20px; bottom: 20px; }
-  #${WIDGET_ID} .bubble { width: 56px; height: 56px; border-radius: 999px; box-shadow: 0 8px 24px rgba(0,0,0,.18); display:flex; align-items:center; justify-content:center; cursor:pointer; background: #111; color:#fff; }
-  #${WIDGET_ID} .panel { position: absolute; right: 0; bottom: 72px; width: 340px; max-height: 70vh; background: #fff; border-radius: 16px; box-shadow: 0 16px 40px rgba(0,0,0,.25); display:none; flex-direction:column; overflow:hidden; border:1px solid #e5e7eb; }
+  #${WIDGET_ID} .bubble {
+    width: 56px; height: 56px; border-radius: 999px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.18);
+    display:flex; align-items:center; justify-content:center; cursor:pointer;
+    background: var(--va-bubble); color:#fff;
+  }
+
+  #${WIDGET_ID} .panel {
+    position: absolute; right: 0; bottom: 72px; width: 340px; max-height: 70vh;
+    background: var(--va-surface); color: var(--va-text);
+    border-radius: 16px; box-shadow: 0 16px 40px rgba(0,0,0,.25);
+    display:none; flex-direction:column; overflow:hidden; border:1px solid #e5e7eb;
+  }
   #${WIDGET_ID} .panel.open { display:flex; }
-  #${WIDGET_ID} header { padding: 10px 12px; font-weight: bold; border-bottom: 1px solid #f0f0f0; display:flex; align-items:center; justify-content:space-between; }
+
+  #${WIDGET_ID} header {
+    padding: 10px 12px; border-bottom: 1px solid #f0f0f0;
+    display:flex; align-items:center; justify-content:space-between;
+    background: var(--va-header-bg); color: var(--va-header-text);
+  }
   #${WIDGET_ID} header .brand { font-size: 13px; opacity:.85 }
-  #${WIDGET_ID} header button { all: unset; cursor:pointer; padding: 6px 8px; border-radius: 8px; }
-  #${WIDGET_ID} .log { padding: 10px 12px; display:flex; gap:8px; flex-direction:column; overflow:auto; background:#fff; }
+  #${WIDGET_ID} header button { all: unset; cursor:pointer; padding: 6px 8px; border-radius: 8px; color: inherit; }
+
+  #${WIDGET_ID} .log { padding: 10px 12px; display:flex; gap:8px; flex-direction:column; overflow:auto; background: var(--va-surface); }
+
   #${WIDGET_ID} .msg { font-size: 13px; line-height: 1.35; padding: 8px 10px; border-radius: 10px; max-width: 85%; white-space: pre-wrap; }
-  #${WIDGET_ID} .msg.user { align-self: flex-end; background:#111; color:#fff; border-top-right-radius: 4px; }
-  #${WIDGET_ID} .msg.assistant { align-self: flex-start; background:#f6f6f7; color:#111; border-top-left-radius: 4px; }
-  #${WIDGET_ID} footer { border-top: 1px solid #f0f0f0; padding: 8px; display:flex; gap:6px; background:#fff; }
-  #${WIDGET_ID} textarea { -webkit-appearance:none; appearance:none; resize:none; flex:1; min-height:40px; max-height:140px; border:1px solid #ddd; border-radius:10px; padding:8px 10px; font-size:13px; background:#fff; color:#111; outline:none; box-shadow:none; }
-  #${WIDGET_ID} .send { all: unset; display:inline-flex; align-items:center; justify-content:center; background:#111; color:#fff; border-radius:10px; padding: 8px 12px; font-size:13px; cursor:pointer; line-height:1; }
-  #${WIDGET_ID} .hint { font-size: 11px; color:#6b7280; padding: 6px 12px 10px; background:#fff; }
+  #${WIDGET_ID} .msg.user { align-self: flex-end; background: var(--va-primary); color: var(--va-user-text); border-top-right-radius: 4px; }
+  #${WIDGET_ID} .msg.assistant { align-self: flex-start; background: var(--va-assistant-bubble); color: var(--va-text); border-top-left-radius: 4px; }
+
+  #${WIDGET_ID} footer { border-top: 1px solid #f0f0f0; padding: 8px; display:flex; gap:6px; background: var(--va-surface); }
+  #${WIDGET_ID} textarea {
+    -webkit-appearance:none; appearance:none; resize:none; flex:1; min-height:40px; max-height:140px;
+    border:1px solid #ddd; border-radius:10px; padding:8px 10px; font-size:13px; background:#fff; color:#111; outline:none; box-shadow:none;
+  }
+  #${WIDGET_ID} .send {
+    all: unset; display:inline-flex; align-items:center; justify-content:center; background: var(--va-primary); color:#fff;
+    border-radius:10px; padding: 8px 12px; font-size:13px; cursor:pointer; line-height:1;
+  }
+  #${WIDGET_ID} .hint { font-size: 11px; color:#6b7280; padding: 6px 12px 10px; background: var(--va-surface); }
+
   #${WIDGET_ID} .typing { display:flex; align-items:center; gap:6px; padding:8px 12px; margin:6px 10px; background:#f3f4f6; border-radius:16px; width:fit-content; }
   #${WIDGET_ID} .typing span { width:8px; height:8px; background:#6b7280; border-radius:50%; display:inline-block; opacity:.4; animation: vivid-blink 1.2s infinite both; }
   #${WIDGET_ID} .typing span:nth-child(2) { animation-delay:.2s; }
@@ -62,15 +121,77 @@ function injectStyles() {
   shadow.appendChild(style);
 }
 
-// ---------- Widget ----------
-export function initChatWidget(opts: InitChatOptions = {}) {
+// ---- Storage helpers ----
+function getStoreKey(k?: string) {
+  return k || "vivid_chat_session";
+}
+function loadSession(key: string): ChatMessage[] | null {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as ChatMessage[]) : null;
+  } catch {
+    return null;
+  }
+}
+function saveSession(key: string, msgs: ChatMessage[]) {
+  try {
+    localStorage.setItem(key, JSON.stringify(msgs.slice(-50)));
+  } catch {}
+}
+function onceFlag(flagKey: string): boolean {
+  try {
+    return localStorage.getItem(flagKey) === "1";
+  } catch {
+    return false;
+  }
+}
+function setOnceFlag(flagKey: string) {
+  try {
+    localStorage.setItem(flagKey, "1");
+  } catch {}
+}
+
+// ---- Widget ----
+export function initChatWidget(userOpts: Options = {}) {
+  // defaults
+  const opts: Options = {
+    title: "Vivid Assistant",
+    welcomeOnce: true,
+    autoOpenOnce: true,
+    persist: true,
+    storageKey: "vivid_chat_session",
+    theme: {
+      primary: "#111",
+      bubbleColor: "#111",
+      surface: "#fff",
+      text: "#111",
+      assistantBubble: "#f6f6f7",
+      userText: "#fff",
+      headerBg: "#fff",
+      headerText: "#111",
+    },
+    ...userOpts,
+  };
+
   const apiBase = opts.apiBase ?? "/api/ai";
   const business = opts.business ?? inferBusinessFromHost();
   const siteName = opts.siteName ?? (document.title || "Vivid Store");
   const debug = !!opts.debug;
 
+  // theme -> css vars
+  const vars = {
+    "--va-primary": opts.theme?.primary || "#111",
+    "--va-surface": opts.theme?.surface || "#fff",
+    "--va-text": opts.theme?.text || "#111",
+    "--va-assistant-bubble": opts.theme?.assistantBubble || "#f6f6f7",
+    "--va-user-text": opts.theme?.userText || "#fff",
+    "--va-header-bg": opts.theme?.headerBg || "#fff",
+    "--va-header-text": opts.theme?.headerText || "#111",
+    "--va-bubble": opts.theme?.bubbleColor || opts.theme?.primary || "#111",
+  };
+
   const { shadow } = getHostAndShadow();
-  injectStyles();
+  injectStyles(vars);
 
   let open = false;
   const widget = document.createElement("div");
@@ -79,14 +200,14 @@ export function initChatWidget(opts: InitChatOptions = {}) {
   const bubble = document.createElement("button");
   bubble.className = "bubble";
   bubble.title = "Chat";
-  bubble.innerHTML = svgChatIcon();
+  bubble.innerHTML = opts.iconSVG || svgChatIcon();
 
   const panel = document.createElement("div");
   panel.className = "panel";
 
   const header = document.createElement("header");
   const hTitle = document.createElement("div");
-  hTitle.textContent = "Prisma Assistant";
+  hTitle.textContent = opts.title || "Vivid Assistant";
   const hBrand = document.createElement("div");
   hBrand.className = "brand";
   hBrand.textContent = siteName;
@@ -128,40 +249,58 @@ export function initChatWidget(opts: InitChatOptions = {}) {
 
   widget.appendChild(bubble);
   widget.appendChild(panel);
-
-  // ✅ append the widget INSIDE the shadow root (isolated from host CSS)
-  shadow.appendChild(widget);
+  shadow.appendChild(widget); // Shadow DOM attach
 
   function setOpen(v: boolean) {
     open = v;
     panel.classList.toggle("open", open);
+    // welcome message when first opened
+    if (open && opts.welcomeMessage) {
+      const onceKey = "vivid_chat_welcome_shown";
+      if (!opts.welcomeOnce || !onceFlag(onceKey)) {
+        addMsg("assistant", opts.welcomeMessage);
+        if (opts.welcomeOnce) setOnceFlag(onceKey);
+      }
+    }
   }
 
   bubble.addEventListener("click", () => setOpen(!open));
   closeBtn.addEventListener("click", () => setOpen(false));
 
-  const messages: ChatMessage[] = [
+  // ---- Messages / persistence ----
+  const storageKey = getStoreKey(opts.storageKey);
+  const messages: ChatMessage[] = (opts.persist && loadSession(storageKey)) || [
     { role: "system", content: systemPrompt(siteName, business) },
   ];
+
+  // If we loaded history, render it (skip the system message)
+  if (messages.length && messages[0].role === "system") {
+    for (const m of messages.slice(1))
+      addMsg(m.role as "user" | "assistant", m.content);
+  }
+
+  function snapshot() {
+    if (opts.persist) saveSession(storageKey, messages);
+  }
 
   async function doSend() {
     const text = ta.value.trim();
     if (!text) return;
     addMsg("user", text);
+    messages.push({ role: "user", content: text });
+    snapshot();
+
     ta.value = "";
     if (sendBtn) sendBtn.disabled = true;
     typing.style.display = "flex";
+
     try {
-      const reply = await sendChat(
-        apiBase,
-        business,
-        messages.concat({ role: "user", content: text })
-      );
+      const reply = await sendChat(apiBase, business, messages);
       typing.style.display = "none";
       if (sendBtn) sendBtn.disabled = false;
-      messages.push({ role: "user", content: text });
       messages.push({ role: "assistant", content: reply });
       addMsg("assistant", reply);
+      snapshot();
       emitAnalytics("vivid_chat_message", { role: "assistant" });
     } catch (err: any) {
       typing.style.display = "none";
@@ -169,7 +308,9 @@ export function initChatWidget(opts: InitChatOptions = {}) {
       const m = `Sorry — I had trouble reaching the assistant. (${
         err?.message || "Network error"
       })`;
+      messages.push({ role: "assistant", content: m });
       addMsg("assistant", m);
+      snapshot();
       if (debug) console.error(err);
     }
   }
@@ -201,10 +342,26 @@ export function initChatWidget(opts: InitChatOptions = {}) {
   }
 
   if (debug)
-    console.log("Chat widget initialized", { apiBase, business, siteName });
+    console.log("Chat widget initialized", {
+      apiBase,
+      business,
+      siteName,
+      options: opts,
+    });
+
+  // ---- Auto-open support ----
+  if (typeof opts.autoOpenDelay === "number") {
+    const onceKey = "vivid_chat_auto_open_done";
+    if (!opts.autoOpenOnce || !onceFlag(onceKey)) {
+      setTimeout(() => {
+        setOpen(true);
+        if (opts.autoOpenOnce) setOnceFlag(onceKey);
+      }, Math.max(0, opts.autoOpenDelay));
+    }
+  }
 }
 
-// ---------- Utils ----------
+// ---- Utils ----
 function svgChatIcon() {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zM6 9h12v2H6V9zm0-4h12v2H6V5zm0 8h8v2H6v-2z"/></svg>`;
 }
