@@ -369,6 +369,12 @@ export function initChatWidget(userOpts: Options = {}) {
       }, Math.max(0, opts.autoOpenDelay));
     }
   }
+  // ---- Clear chat log on page close ----
+  window.addEventListener("beforeunload", () => {
+    try {
+      localStorage.removeItem(getStoreKey(opts.storageKey));
+    } catch {}
+  });
 }
 
 // ---- Utils ----
