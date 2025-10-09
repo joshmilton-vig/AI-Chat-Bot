@@ -22,6 +22,12 @@ function injectStyles() {
   #${WIDGET_ID} textarea { resize:none; flex:1; min-height:40px; max-height:140px; border:1px solid #ddd; border-radius:10px; padding:8px 10px; font-size:13px; }
   #${WIDGET_ID} .send { background:#111; color:#fff; border:none; border-radius:10px; padding: 0 12px; font-size:13px; cursor:pointer; }
   #${WIDGET_ID} .hint { font-size: 11px; color:#6b7280; padding: 6px 12px 10px; }
+  #${WIDGET_ID} .typing { display:flex; align-items:center; gap:6px; padding:8px 12px; margin:6px 10px; background:#f3f4f6; border-radius:16px; width:fit-content; }
+  #${WIDGET_ID} .typing span { width:8px; height:8px; background:#6b7280; border-radius:50%; display:inline-block; opacity:.4; animation: vivid-blink 1.2s infinite both; }
+  #${WIDGET_ID} .typing span:nth-child(2) { animation-delay:.2s; }
+  #${WIDGET_ID} .typing span:nth-child(3) { animation-delay:.4s; }
+  @keyframes vivid-blink { 0%{opacity:.4;} 20%{opacity:1;} 100%{opacity:.4;} }
+
   `;
   const style = document.createElement("style");
   style.id = STYLE_TAG_ID;
@@ -32,7 +38,7 @@ function injectStyles() {
 export function initChatWidget(opts: InitChatOptions = {}) {
   const apiBase = opts.apiBase ?? "/api/ai";
   const business = opts.business ?? inferBusinessFromHost();
-  const siteName = opts.siteName ?? document.title || "Vivid Store";
+  const siteName = opts.siteName ?? (document.title || "Vivid Store");
   const debug = !!opts.debug;
 
   injectStyles();
@@ -66,6 +72,11 @@ export function initChatWidget(opts: InitChatOptions = {}) {
 
   const log = document.createElement("div");
   log.className = "log";
+  const typing = document.createElement("div");
+  typing.className = "typing";
+  typing.style.display = "none";
+  typing.innerHTML = "<span></span><span></span><span></span>";
+  log.appendChild(typing);
 
   const footer = document.createElement("footer");
   const ta = document.createElement("textarea");
@@ -78,7 +89,8 @@ export function initChatWidget(opts: InitChatOptions = {}) {
 
   const hint = document.createElement("div");
   hint.className = "hint";
-  hint.textContent = "No order/account lookups. For payments or existing orders, contact support.";
+  hint.textContent =
+    "No order/account lookups. For payments or existing orders, contact support.";
 
   panel.appendChild(header);
   panel.appendChild(log);
@@ -106,14 +118,24 @@ export function initChatWidget(opts: InitChatOptions = {}) {
     if (!text) return;
     addMsg("user", text);
     ta.value = "";
+    if (sendBtn) sendBtn.disabled = true;
+    typing.style.display = "flex";
     try {
-      const reply = await sendChat(apiBase, business, messages.concat({ role: "user", content: text }));
+      const reply = await sendChat(
+        apiBase,
+        business,
+        messages.concat({ role: "user", content: text })
+      );
+      typing.style.display = "none";
+      if (sendBtn) sendBtn.disabled = false;
       messages.push({ role: "user", content: text });
       messages.push({ role: "assistant", content: reply });
       addMsg("assistant", reply);
       emitAnalytics("vivid_chat_message", { role: "assistant" });
     } catch (err: any) {
-      const m = `Sorry — I had trouble reaching the assistant. (${err?.message || "Network error"})`;
+      const m = `Sorry — I had trouble reaching the assistant. (${
+        err?.message || "Network error"
+      })`;
       addMsg("assistant", m);
       if (debug) console.error(err);
     }
@@ -137,10 +159,16 @@ export function initChatWidget(opts: InitChatOptions = {}) {
 
   function emitAnalytics(eventName: string, payload: Record<string, any>) {
     (window as any).dataLayer = (window as any).dataLayer || [];
-    (window as any).dataLayer.push({ event: eventName, ...payload, business, siteName });
+    (window as any).dataLayer.push({
+      event: eventName,
+      ...payload,
+      business,
+      siteName,
+    });
   }
 
-  if (debug) console.log("Chat widget initialized", { apiBase, business, siteName });
+  if (debug)
+    console.log("Chat widget initialized", { apiBase, business, siteName });
 }
 
 function svgChatIcon() {
