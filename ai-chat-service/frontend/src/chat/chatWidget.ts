@@ -17,7 +17,7 @@ type Theme = {
   bubbleColor?: string; // floating launcher bubble color
 };
 type ExtraOptions = {
-  title?: string; // header title (we'll default to "Prisma Assistant")
+  title?: string; // header title (default "Prisma Assistant")
   iconSVG?: string; // custom bubble icon SVG
   welcomeMessage?: string; // assistant message on first open
   welcomeOnce?: boolean; // show welcome only once (default true)
@@ -168,16 +168,25 @@ export function initChatWidget(userOpts: Options = {}) {
       text: "#111",
       assistantBubble: "#f6f6f7",
       userText: "#fff",
-      headerBg: "#000", // <-- black header
-      headerText: "#fff", // <-- white header text
+      headerBg: "#000", // black header
+      headerText: "#fff", // white header text
     },
     ...userOpts,
   };
 
   const apiBase = opts.apiBase ?? "/api/ai";
   const business = opts.business ?? inferBusinessFromHost();
-  const siteName = opts.siteName ?? (document.title || "Vivid Store"); // still used for analytics only
+  const siteName = opts.siteName ?? (document.title || "Vivid Store"); // used for analytics only
   const debug = !!opts.debug;
+
+  // ---- Persist across navigation; clear only on NEW tab session ----
+  const KEY = getStoreKey(opts.storageKey);
+  const SESSION_FLAG = "vivid_chat_active_session";
+  if (!sessionStorage.getItem(SESSION_FLAG)) {
+    // New tab session starts now -> clear any stale chat from previous tab
+    localStorage.removeItem(KEY);
+  }
+  sessionStorage.setItem(SESSION_FLAG, "1");
 
   // theme -> css vars
   const vars = {
@@ -260,8 +269,7 @@ export function initChatWidget(userOpts: Options = {}) {
   closeBtn.addEventListener("click", () => setOpen(false));
 
   // ---- Messages / persistence ----
-  const storageKey = getStoreKey(opts.storageKey);
-  const messages: ChatMessage[] = (opts.persist && loadSession(storageKey)) || [
+  const messages: ChatMessage[] = (opts.persist && loadSession(KEY)) || [
     { role: "system", content: systemPrompt(siteName, business) },
   ];
 
@@ -272,7 +280,7 @@ export function initChatWidget(userOpts: Options = {}) {
   }
 
   function snapshot() {
-    if (opts.persist) saveSession(storageKey, messages);
+    if (opts.persist) saveSession(KEY, messages);
   }
 
   // Inline typing indicator helpers
@@ -282,7 +290,7 @@ export function initChatWidget(userOpts: Options = {}) {
     typingEl = document.createElement("div");
     typingEl.className = "typing";
     typingEl.innerHTML = "<span></span><span></span><span></span>";
-    log.appendChild(typingEl); // <-- appears AFTER the user message
+    log.appendChild(typingEl); // appears AFTER the user message
     log.scrollTop = log.scrollHeight;
   }
   function hideTyping() {
@@ -369,48 +377,6 @@ export function initChatWidget(userOpts: Options = {}) {
       }, Math.max(0, opts.autoOpenDelay));
     }
   }
-
-  // ---- Smart clear only on real tab close (typed) ----
-  try {
-    const KEY = getStoreKey(opts.storageKey);
-    const SESSION_FLAG = "vivid_chat_active_session";
-    sessionStorage.setItem(SESSION_FLAG, "1");
-
-    function getNavType():
-      | "navigate"
-      | "reload"
-      | "back_forward"
-      | "prerender"
-      | undefined {
-      const nav = performance.getEntriesByType(
-        "navigation"
-      ) as PerformanceNavigationTiming[];
-      return nav[0]?.type;
-    }
-
-    // Clear only when we believe the tab is actually closing
-    window.addEventListener("pagehide", (ev) => {
-      // pagehide fires on reload and BFCache navigations too; keep history in those cases
-      const t = getNavType();
-      if (t === "reload" || t === "back_forward") return;
-
-      // If you want to ALSO keep history on same-tab navigations, keep this:
-      if (t === "navigate") return;
-
-      // Otherwise, treat as tab/window close
-      sessionStorage.removeItem(SESSION_FLAG);
-      localStorage.removeItem(KEY);
-    });
-  } catch (err) {
-    if (opts.debug) console.warn("Session cleanup logic failed:", err);
-  }
-
-  // ---- Clear chat log on page close ----
-  window.addEventListener("beforeunload", () => {
-    try {
-      localStorage.removeItem(getStoreKey(opts.storageKey));
-    } catch {}
-  });
 }
 
 // ---- Utils ----
