@@ -3,44 +3,73 @@ import type { ChatMessage, InitChatOptions } from "./types";
 
 const STYLE_TAG_ID = "vivid-chat-style";
 const WIDGET_ID = "vivid-chat-widget";
+const HOST_ID = "vivid-chat-host";
 
+// ---------- Shadow DOM host ----------
+let SHADOW: ShadowRoot | null = null;
+
+function getHostAndShadow() {
+  let host = document.getElementById(HOST_ID) as HTMLElement | null;
+  if (!host) {
+    host = document.createElement("div");
+    host.id = HOST_ID;
+    // keep the host out of page layout and above everything
+    host.style.position = "fixed";
+    host.style.right = "0";
+    host.style.bottom = "0";
+    host.style.zIndex = "2147483647"; // max z-index
+    document.body.appendChild(host);
+  }
+  SHADOW = host.shadowRoot ?? host.attachShadow({ mode: "open" });
+  return { host, shadow: SHADOW! };
+}
+
+// ---------- Styles (in Shadow DOM) ----------
 function injectStyles() {
-  if (document.getElementById(STYLE_TAG_ID)) return;
+  const { shadow } = getHostAndShadow();
+  if (shadow.getElementById(STYLE_TAG_ID)) return;
+
   const css = `
-  #${WIDGET_ID} { position: fixed; z-index: 99999; right: 20px; bottom: 20px; font-family: Verdana, Arial, sans-serif; }
+  /* Small reset so host styles never bleed in */
+  :host, :host * { box-sizing: border-box; }
+  :host * { font-family: Verdana, Arial, sans-serif; }
+
+  #${WIDGET_ID} { position: fixed; z-index: 2147483647; right: 20px; bottom: 20px; }
   #${WIDGET_ID} .bubble { width: 56px; height: 56px; border-radius: 999px; box-shadow: 0 8px 24px rgba(0,0,0,.18); display:flex; align-items:center; justify-content:center; cursor:pointer; background: #111; color:#fff; }
   #${WIDGET_ID} .panel { position: absolute; right: 0; bottom: 72px; width: 340px; max-height: 70vh; background: #fff; border-radius: 16px; box-shadow: 0 16px 40px rgba(0,0,0,.25); display:none; flex-direction:column; overflow:hidden; border:1px solid #e5e7eb; }
   #${WIDGET_ID} .panel.open { display:flex; }
   #${WIDGET_ID} header { padding: 10px 12px; font-weight: bold; border-bottom: 1px solid #f0f0f0; display:flex; align-items:center; justify-content:space-between; }
   #${WIDGET_ID} header .brand { font-size: 13px; opacity:.85 }
   #${WIDGET_ID} header button { all: unset; cursor:pointer; padding: 6px 8px; border-radius: 8px; }
-  #${WIDGET_ID} .log { padding: 10px 12px; display:flex; gap:8px; flex-direction:column; overflow:auto; }
+  #${WIDGET_ID} .log { padding: 10px 12px; display:flex; gap:8px; flex-direction:column; overflow:auto; background:#fff; }
   #${WIDGET_ID} .msg { font-size: 13px; line-height: 1.35; padding: 8px 10px; border-radius: 10px; max-width: 85%; white-space: pre-wrap; }
   #${WIDGET_ID} .msg.user { align-self: flex-end; background:#111; color:#fff; border-top-right-radius: 4px; }
   #${WIDGET_ID} .msg.assistant { align-self: flex-start; background:#f6f6f7; color:#111; border-top-left-radius: 4px; }
-  #${WIDGET_ID} footer { border-top: 1px solid #f0f0f0; padding: 8px; display:flex; gap:6px; }
-  #${WIDGET_ID} textarea { resize:none; flex:1; min-height:40px; max-height:140px; border:1px solid #ddd; border-radius:10px; padding:8px 10px; font-size:13px; }
-  #${WIDGET_ID} .send { background:#111; color:#fff; border:none; border-radius:10px; padding: 0 12px; font-size:13px; cursor:pointer; }
-  #${WIDGET_ID} .hint { font-size: 11px; color:#6b7280; padding: 6px 12px 10px; }
+  #${WIDGET_ID} footer { border-top: 1px solid #f0f0f0; padding: 8px; display:flex; gap:6px; background:#fff; }
+  #${WIDGET_ID} textarea { -webkit-appearance:none; appearance:none; resize:none; flex:1; min-height:40px; max-height:140px; border:1px solid #ddd; border-radius:10px; padding:8px 10px; font-size:13px; background:#fff; color:#111; outline:none; box-shadow:none; }
+  #${WIDGET_ID} .send { all: unset; display:inline-flex; align-items:center; justify-content:center; background:#111; color:#fff; border-radius:10px; padding: 8px 12px; font-size:13px; cursor:pointer; line-height:1; }
+  #${WIDGET_ID} .hint { font-size: 11px; color:#6b7280; padding: 6px 12px 10px; background:#fff; }
   #${WIDGET_ID} .typing { display:flex; align-items:center; gap:6px; padding:8px 12px; margin:6px 10px; background:#f3f4f6; border-radius:16px; width:fit-content; }
   #${WIDGET_ID} .typing span { width:8px; height:8px; background:#6b7280; border-radius:50%; display:inline-block; opacity:.4; animation: vivid-blink 1.2s infinite both; }
   #${WIDGET_ID} .typing span:nth-child(2) { animation-delay:.2s; }
   #${WIDGET_ID} .typing span:nth-child(3) { animation-delay:.4s; }
   @keyframes vivid-blink { 0%{opacity:.4;} 20%{opacity:1;} 100%{opacity:.4;} }
-
   `;
+
   const style = document.createElement("style");
   style.id = STYLE_TAG_ID;
   style.textContent = css;
-  document.head.appendChild(style);
+  shadow.appendChild(style);
 }
 
+// ---------- Widget ----------
 export function initChatWidget(opts: InitChatOptions = {}) {
   const apiBase = opts.apiBase ?? "/api/ai";
   const business = opts.business ?? inferBusinessFromHost();
   const siteName = opts.siteName ?? (document.title || "Vivid Store");
   const debug = !!opts.debug;
 
+  const { shadow } = getHostAndShadow();
   injectStyles();
 
   let open = false;
@@ -99,7 +128,9 @@ export function initChatWidget(opts: InitChatOptions = {}) {
 
   widget.appendChild(bubble);
   widget.appendChild(panel);
-  document.body.appendChild(widget);
+
+  // ✅ append the widget INSIDE the shadow root (isolated from host CSS)
+  shadow.appendChild(widget);
 
   function setOpen(v: boolean) {
     open = v;
@@ -133,6 +164,8 @@ export function initChatWidget(opts: InitChatOptions = {}) {
       addMsg("assistant", reply);
       emitAnalytics("vivid_chat_message", { role: "assistant" });
     } catch (err: any) {
+      typing.style.display = "none";
+      if (sendBtn) sendBtn.disabled = false;
       const m = `Sorry — I had trouble reaching the assistant. (${
         err?.message || "Network error"
       })`;
@@ -171,6 +204,7 @@ export function initChatWidget(opts: InitChatOptions = {}) {
     console.log("Chat widget initialized", { apiBase, business, siteName });
 }
 
+// ---------- Utils ----------
 function svgChatIcon() {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zM6 9h12v2H6V9zm0-4h12v2H6V5zm0 8h8v2H6v-2z"/></svg>`;
 }
