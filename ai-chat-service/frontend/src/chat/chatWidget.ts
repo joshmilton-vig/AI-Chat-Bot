@@ -17,7 +17,7 @@ type Theme = {
   bubbleColor?: string; // floating launcher bubble color
 };
 type ExtraOptions = {
-  title?: string; // header title
+  title?: string; // header title (we'll default to "Prisma Assistant")
   iconSVG?: string; // custom bubble icon SVG
   welcomeMessage?: string; // assistant message on first open
   welcomeOnce?: boolean; // show welcome only once (default true)
@@ -84,11 +84,11 @@ function injectStyles(vars: Record<string, string>) {
   #${WIDGET_ID} .panel.open { display:flex; }
 
   #${WIDGET_ID} header {
-    padding: 10px 12px; border-bottom: 1px solid #f0f0f0;
+    padding: 10px 12px; border-bottom: 1px solid #0b0b0b;
     display:flex; align-items:center; justify-content:space-between;
     background: var(--va-header-bg); color: var(--va-header-text);
   }
-  #${WIDGET_ID} header .brand { font-size: 13px; opacity:.85 }
+  #${WIDGET_ID} header .title { font-weight: 700; }
   #${WIDGET_ID} header button { all: unset; cursor:pointer; padding: 6px 8px; border-radius: 8px; color: inherit; }
 
   #${WIDGET_ID} .log { padding: 10px 12px; display:flex; gap:8px; flex-direction:column; overflow:auto; background: var(--va-surface); }
@@ -108,7 +108,8 @@ function injectStyles(vars: Record<string, string>) {
   }
   #${WIDGET_ID} .hint { font-size: 11px; color:#6b7280; padding: 6px 12px 10px; background: var(--va-surface); }
 
-  #${WIDGET_ID} .typing { display:flex; align-items:center; gap:6px; padding:8px 12px; margin:6px 10px; background:#f3f4f6; border-radius:16px; width:fit-content; }
+  /* Typing indicator bubble (inline in log, after user msg) */
+  #${WIDGET_ID} .typing { align-self: flex-start; display:flex; align-items:center; gap:6px; padding:8px 12px; margin:2px 0 0 0; background:#f3f4f6; border-radius:16px; width:fit-content; }
   #${WIDGET_ID} .typing span { width:8px; height:8px; background:#6b7280; border-radius:50%; display:inline-block; opacity:.4; animation: vivid-blink 1.2s infinite both; }
   #${WIDGET_ID} .typing span:nth-child(2) { animation-delay:.2s; }
   #${WIDGET_ID} .typing span:nth-child(3) { animation-delay:.4s; }
@@ -153,9 +154,9 @@ function setOnceFlag(flagKey: string) {
 
 // ---- Widget ----
 export function initChatWidget(userOpts: Options = {}) {
-  // defaults
+  // defaults (title fixed, black header w/ white text)
   const opts: Options = {
-    title: "Vivid Assistant",
+    title: "Prisma Assistant",
     welcomeOnce: true,
     autoOpenOnce: true,
     persist: true,
@@ -167,15 +168,15 @@ export function initChatWidget(userOpts: Options = {}) {
       text: "#111",
       assistantBubble: "#f6f6f7",
       userText: "#fff",
-      headerBg: "#fff",
-      headerText: "#111",
+      headerBg: "#000", // <-- black header
+      headerText: "#fff", // <-- white header text
     },
     ...userOpts,
   };
 
   const apiBase = opts.apiBase ?? "/api/ai";
   const business = opts.business ?? inferBusinessFromHost();
-  const siteName = opts.siteName ?? (document.title || "Vivid Store");
+  const siteName = opts.siteName ?? (document.title || "Vivid Store"); // still used for analytics only
   const debug = !!opts.debug;
 
   // theme -> css vars
@@ -185,8 +186,8 @@ export function initChatWidget(userOpts: Options = {}) {
     "--va-text": opts.theme?.text || "#111",
     "--va-assistant-bubble": opts.theme?.assistantBubble || "#f6f6f7",
     "--va-user-text": opts.theme?.userText || "#fff",
-    "--va-header-bg": opts.theme?.headerBg || "#fff",
-    "--va-header-text": opts.theme?.headerText || "#111",
+    "--va-header-bg": opts.theme?.headerBg || "#000",
+    "--va-header-text": opts.theme?.headerText || "#fff",
     "--va-bubble": opts.theme?.bubbleColor || opts.theme?.primary || "#111",
   };
 
@@ -207,26 +208,18 @@ export function initChatWidget(userOpts: Options = {}) {
 
   const header = document.createElement("header");
   const hTitle = document.createElement("div");
-  hTitle.textContent = opts.title || "Vivid Assistant";
-  const hBrand = document.createElement("div");
-  hBrand.className = "brand";
-  hBrand.textContent = siteName;
+  hTitle.className = "title";
+  hTitle.textContent = opts.title || "Prisma Assistant";
   const hRight = document.createElement("div");
   const closeBtn = document.createElement("button");
   closeBtn.ariaLabel = "Close";
   closeBtn.innerHTML = "✕";
   hRight.appendChild(closeBtn);
   header.appendChild(hTitle);
-  header.appendChild(hBrand);
   header.appendChild(hRight);
 
   const log = document.createElement("div");
   log.className = "log";
-  const typing = document.createElement("div");
-  typing.className = "typing";
-  typing.style.display = "none";
-  typing.innerHTML = "<span></span><span></span><span></span>";
-  log.appendChild(typing);
 
   const footer = document.createElement("footer");
   const ta = document.createElement("textarea");
@@ -254,7 +247,6 @@ export function initChatWidget(userOpts: Options = {}) {
   function setOpen(v: boolean) {
     open = v;
     panel.classList.toggle("open", open);
-    // welcome message when first opened
     if (open && opts.welcomeMessage) {
       const onceKey = "vivid_chat_welcome_shown";
       if (!opts.welcomeOnce || !onceFlag(onceKey)) {
@@ -273,7 +265,7 @@ export function initChatWidget(userOpts: Options = {}) {
     { role: "system", content: systemPrompt(siteName, business) },
   ];
 
-  // If we loaded history, render it (skip the system message)
+  // Render history (skip system)
   if (messages.length && messages[0].role === "system") {
     for (const m of messages.slice(1))
       addMsg(m.role as "user" | "assistant", m.content);
@@ -281,6 +273,22 @@ export function initChatWidget(userOpts: Options = {}) {
 
   function snapshot() {
     if (opts.persist) saveSession(storageKey, messages);
+  }
+
+  // Inline typing indicator helpers
+  let typingEl: HTMLDivElement | null = null;
+  function showTyping() {
+    if (typingEl) return;
+    typingEl = document.createElement("div");
+    typingEl.className = "typing";
+    typingEl.innerHTML = "<span></span><span></span><span></span>";
+    log.appendChild(typingEl); // <-- appears AFTER the user message
+    log.scrollTop = log.scrollHeight;
+  }
+  function hideTyping() {
+    if (typingEl && typingEl.parentNode)
+      typingEl.parentNode.removeChild(typingEl);
+    typingEl = null;
   }
 
   async function doSend() {
@@ -291,20 +299,22 @@ export function initChatWidget(userOpts: Options = {}) {
     snapshot();
 
     ta.value = "";
-    if (sendBtn) sendBtn.disabled = true;
-    typing.style.display = "flex";
+    sendBtn.disabled = true;
+    showTyping();
 
     try {
       const reply = await sendChat(apiBase, business, messages);
-      typing.style.display = "none";
-      if (sendBtn) sendBtn.disabled = false;
+      hideTyping();
+      sendBtn.disabled = false;
+
       messages.push({ role: "assistant", content: reply });
       addMsg("assistant", reply);
       snapshot();
       emitAnalytics("vivid_chat_message", { role: "assistant" });
     } catch (err: any) {
-      typing.style.display = "none";
-      if (sendBtn) sendBtn.disabled = false;
+      hideTyping();
+      sendBtn.disabled = false;
+
       const m = `Sorry — I had trouble reaching the assistant. (${
         err?.message || "Network error"
       })`;
