@@ -187,12 +187,32 @@ async function fetchJSON<T>(
 ): Promise<T> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  // cache-bust param
+  const bust = url.includes("?")
+    ? "&__ts=" + Date.now()
+    : "?__ts=" + Date.now();
+  const finalUrl = url + bust;
+
   try {
-    const res = await fetch(url, {
+    let res = await fetch(finalUrl, {
       ...opts,
       signal: ctrl.signal,
       credentials: "omit",
+      cache: "no-store", // ← prevent 304 and stale cache
+      headers: { ...(opts?.headers || {}), "cache-control": "no-cache" }, // hint to proxies
     });
+
+    // If some proxy still returns 304, retry once with a stronger bust
+    if (res.status === 304) {
+      res = await fetch(finalUrl + "&_=" + Math.random(), {
+        ...opts,
+        signal: ctrl.signal,
+        credentials: "omit",
+        cache: "no-store",
+        headers: { ...(opts?.headers || {}), "cache-control": "no-cache" },
+      });
+    }
+
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return (await res.json()) as T;
   } finally {

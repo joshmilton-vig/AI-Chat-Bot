@@ -1,3 +1,4 @@
+// frontend/src/routes/catalog.ts
 import express from "express";
 import cors from "cors";
 import fetch from "node-fetch";
@@ -27,6 +28,13 @@ const corsMiddleware = cors({
   },
   credentials: true,
 });
+
+// Optional: per-host read-only session cookies for login-gated catalogs
+// Example env: SMALLCAKES_SESSION_COOKIE="PHPSESSID=abc123; Path=/; Secure"
+const HOST_COOKIES: Record<string, string | undefined> = {
+  "smallcakes.vivid-think.com": process.env.SMALLCAKES_SESSION_COOKIE,
+  // add more hosts as needed
+};
 
 // Only allow HTTPS and hostnames that end with vivid-think.com
 function assertAllowedCatalogUrl(
@@ -68,7 +76,7 @@ function parsePrice(s: string | undefined): number | undefined {
   return m ? Number(m[1]) : undefined;
 }
 
-// ---------- Parsing: catalog search results ----------
+// ---------- Parsing: catalog search results (tailored + generic) ----------
 function extractProductsFromCatalogHTML(origin: URL, html: string): Product[] {
   const $ = cheerio.load(html);
 
@@ -78,7 +86,7 @@ function extractProductsFromCatalogHTML(origin: URL, html: string): Product[] {
     try {
       const obj = JSON.parse($(el).text());
       const arr = Array.isArray(obj) ? obj : [obj];
-      arr.forEach((o) => {
+      arr.forEach((o: any) => {
         if (o["@type"] === "Product" && o.name) {
           ldjson.push({
             id: cleanText(o.sku || o.productID || o.url || o.name),
@@ -99,71 +107,90 @@ function extractProductsFromCatalogHTML(origin: URL, html: string): Product[] {
     } catch {}
   });
 
-  // Heuristic DOM selection (covers common Presswise/Netlify grids)
-  const domProducts: Product[] = [];
-  // Grab card-like elements that contain an anchor to a product page
-  const candidates = $(
-    'a[href*="/product/"], .product-item a, .productBox a'
-  ).toArray();
-
+  // Tailored + generic DOM selection
+  const items: Product[] = [];
   const seen = new Set<string>();
-  for (const el of candidates) {
+
+  // DEMO pattern: anchors to /catalog/2-customize.php plus common fallbacks
+  const linkSel = [
+    'a[href*="/catalog/2-customize.php"]', // demo + many Presswise templates
+    'a[href*="/product/"]',
+    ".product-item a",
+    ".productBox a",
+  ].join(",");
+
+  $(linkSel).each((_, el) => {
     const a = $(el);
     const href = a.attr("href");
     const abs = href ? toAbs(origin, href) : undefined;
-    if (!abs || !/\/product\//.test(abs)) continue;
+    if (!abs) return;
 
-    // Title text (within the link or near it)
+    const card = a.closest(".product-item, .productBox, li, div");
+
+    // Title text (attribute, inner heading, heading in card, or link text)
     const title =
       cleanText(a.attr("title")) ||
-      cleanText(a.find("h2,h3,.product-title,.title").first().text()) ||
+      cleanText(a.find("h1,h2,h3,.product-title,.title").first().text()) ||
+      cleanText(card.find("h1,h2,h3,.product-title,.title").first().text()) ||
       cleanText(a.text());
+    if (!title) return;
 
-    if (!title) continue;
-
-    // Image near the link
-    const parent = a.closest(".product-item, .productBox, li, div");
-    const imgEl = parent.find("img").first();
+    // Image
+    const imgEl = a.find("img").first().length
+      ? a.find("img").first()
+      : card.find("img").first();
     const img = toAbs(origin, imgEl.attr("src") || imgEl.attr("data-src"));
 
-    // Price somewhere in the card
-    const priceEl = parent
+    // Price (often not displayed; leave undefined if missing)
+    const priceEl = card
       .find('.price, .product-price, [class*="price"]')
       .first();
     const price = parsePrice(cleanText(priceEl.text()));
 
     // SKU if present
-    const skuMatch = cleanText(parent.text()).match(
+    const skuMatch = cleanText(card.text()).match(
       /\bSKU[:\s]*([A-Za-z0-9\-\._]+)\b/i
     );
     const sku = skuMatch?.[1];
 
+    // Short desc from a nearby block or the card's own text (minus children)
+    const rawDesc =
+      cleanText(card.find(".product-description,.desc,p,li").first().text()) ||
+      cleanText(card.clone().children().remove().end().text());
+
     const id = cleanText(sku || abs || title);
-    if (seen.has(id)) continue;
+    if (seen.has(id)) return;
     seen.add(id);
 
-    domProducts.push({
+    items.push({
       id,
       sku,
       name: title,
       price,
       imageUrl: img,
       url: abs,
-      desc: undefined,
+      desc: rawDesc || undefined,
     });
-  }
+  });
 
-  // Prefer JSON-LD if it exists, otherwise DOM
-  const items = ldjson.length ? ldjson : domProducts;
-
-  // De-dup by URL or name
+  // Prefer JSON-LD if it exists; append unique DOM items
   const out: Product[] = [];
   const dedupe = new Set<string>();
-  for (const p of items) {
-    const key = p.url || `${p.name}|${p.sku}`;
+  const preferred = ldjson.length ? ldjson : items;
+  for (const p of preferred) {
+    const key = p.url || `${p.name}|${p.sku || ""}`;
     if (key && !dedupe.has(key)) {
       dedupe.add(key);
       out.push(p);
+    }
+  }
+  if (ldjson.length) {
+    for (const p of items) {
+      const key = p.url || `${p.name}|${p.sku || ""}`;
+      if (key && !dedupe.has(key)) {
+        dedupe.add(key);
+        out.push(p);
+      }
     }
   }
   return out;
@@ -203,6 +230,7 @@ function extractProductDetailHTML(origin: URL, html: string): Product {
   const name =
     base.name ||
     cleanText($("h1, .product-title, .title").first().text()) ||
+    cleanText($("h2,h3").first().text()) ||
     "Untitled";
 
   const sku =
@@ -224,8 +252,11 @@ function extractProductDetailHTML(origin: URL, html: string): Product {
   const desc =
     base.desc ||
     cleanText(
-      $("#description, .product-description, .description").first().text()
-    );
+      $("#description, .product-description, .description, .desc")
+        .first()
+        .text()
+    ) ||
+    cleanText($("p,li").slice(0, 3).text());
 
   const img = base.imageUrl || toAbs(origin, $("img").first().attr("src"));
 
@@ -264,17 +295,23 @@ export function mountCatalogRoutes(app: express.Express) {
         true
       );
 
+      const host = siteUrl.hostname;
+      const cookie = HOST_COOKIES[host];
+
       // Presswise/your sites commonly support this search pattern:
       const searchUrl = new URL(siteUrl.toString());
       searchUrl.searchParams.set("search", q);
-      // Optional: copy your known flags from past work:
+      // Optional flags seen in your stack:
       searchUrl.searchParams.set("g", "0");
       searchUrl.searchParams.set("y", "0");
       searchUrl.searchParams.set("p", "0");
       searchUrl.searchParams.set("m", "g");
 
       const r = await fetch(searchUrl.toString(), {
-        headers: { accept: "text/html" },
+        headers: {
+          accept: "text/html",
+          ...(cookie ? { cookie } : {}),
+        },
         // @ts-ignore
         timeout: 10000,
       });
@@ -288,14 +325,23 @@ export function mountCatalogRoutes(app: express.Express) {
         0,
         limit
       );
-      res.json({ site: siteUrl.origin, query: q, count: items.length, items });
+
+      // No-cache to avoid 304 revalidation issues
+      res.set({
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        Pragma: "no-cache",
+        Expires: "0",
+      });
+      res
+        .status(200)
+        .json({ site: siteUrl.origin, query: q, count: items.length, items });
     } catch (e: any) {
       res.status(400).json({ error: e?.message ?? "Bad request" });
     }
   });
 
   // Fetch details for a single product page (must be on *.vivid-think.com)
-  // GET /api/catalog-product?url=https://brand.vivid-think.com/product/slug
+  // GET /api/catalog-product?url=https://brand.vivid-think.com/product/slug OR /catalog/2-customize.php?...
   app.get("/api/catalog-product", async (req, res) => {
     try {
       const url = String(req.query.url ?? "");
@@ -303,9 +349,14 @@ export function mountCatalogRoutes(app: express.Express) {
 
       // For detail pages we relax the /catalog requirement but still enforce vivid-think.com
       const productUrl = assertAllowedCatalogUrl(url, false);
+      const host = productUrl.hostname;
+      const cookie = HOST_COOKIES[host];
 
       const r = await fetch(productUrl.toString(), {
-        headers: { accept: "text/html" },
+        headers: {
+          accept: "text/html",
+          ...(cookie ? { cookie } : {}),
+        },
         // @ts-ignore
         timeout: 10000,
       });
@@ -316,7 +367,14 @@ export function mountCatalogRoutes(app: express.Express) {
 
       const html = await r.text();
       const product = extractProductDetailHTML(productUrl, html);
-      res.json(product);
+
+      // No-cache to avoid 304 revalidation issues
+      res.set({
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+        Pragma: "no-cache",
+        Expires: "0",
+      });
+      res.status(200).json(product);
     } catch (e: any) {
       res.status(400).json({ error: e?.message ?? "Bad request" });
     }

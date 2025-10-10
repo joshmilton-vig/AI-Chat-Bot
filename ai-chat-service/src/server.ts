@@ -82,6 +82,7 @@ function isOriginAllowed(origin: string | undefined): boolean {
 // ---------- App ----------
 const app = express();
 app.disable("x-powered-by");
+app.set("etag", false);
 
 // Health check endpoint (extra)
 app.get("/api/test", (_req, res) => {
@@ -129,7 +130,11 @@ app.use((err: any, req: Request, res: Response, next: NextFunction) => {
 
 // ---------- Health ----------
 app.get("/api/health", (_req, res) => {
-  res.set("Cache-Control", "no-store").json({ ok: true });
+  res.set({
+    "Cache-Control": "no-store, no-cache, must-revalidate",
+    Pragma: "no-cache",
+    Expires: "0",
+  });
 });
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
 
