@@ -5,6 +5,8 @@ const STYLE_TAG_ID = "vivid-chat-style";
 const WIDGET_ID = "vivid-chat-widget";
 const HOST_ID = "vivid-chat-host";
 
+const ASSISTANT_BASE = "https://ai-chat-bot-1xm4.onrender.com"; // ← your Render app
+
 // ---- Extended options (non-breaking) ----
 type Theme = {
   primary?: string; // main brand color (bubble, send button, user msg)
