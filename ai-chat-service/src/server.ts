@@ -63,6 +63,16 @@ function isOriginAllowed(origin: string | undefined): boolean {
 const app = express();
 app.disable("x-powered-by");
 
+// Health check endpoint
+app.get("/api/test", (_req, res) => {
+  res.json({
+    ok: true,
+    uptime: process.uptime(),
+    memory: process.memoryUsage(),
+    ts: Date.now(),
+  });
+});
+
 // Log early (before other middleware)
 app.use(morgan(NODE_ENV === "production" ? "combined" : "dev"));
 
