@@ -29,13 +29,13 @@ type ExtraOptions = {
   storageKey?: string;
   theme?: Theme;
 
-  /** NEW: base catalog site (must be https://*.vivid-think.com). Example: https://toastedyolk.vivid-think.com */
+  /** Base catalog site (must be https://*.vivid-think.com). Example: https://demo.vivid-think.com */
   catalogSite?: string;
 
-  /** Optional: limit results shown in product search (default 6) */
+  /** Limit product results (1–24, default 6) */
   productLimit?: number;
 
-  /** Optional: disable product search interception */
+  /** Disable product query interception */
   disableProductSearch?: boolean;
 
   /** Debug logging */
@@ -135,7 +135,7 @@ function injectStyles(vars: Record<string, string>) {
   #${WIDGET_ID} .vivid-detail { border:1px solid #eee; border-radius:12px; padding:14px; background:#fff; }
   #${WIDGET_ID} .vivid-detail img { width:96px; height:96px; object-fit:cover; border-radius:12px; }
 
-  /* Typing indicator bubble (inline in log, after user msg) */
+  /* Typing indicator bubble */
   #${WIDGET_ID} .typing { align-self: flex-start; display:flex; align-items:center; gap:6px; padding:8px 12px; margin:2px 0 0 0; background:#f3f4f6; border-radius:16px; width:fit-content; }
   #${WIDGET_ID} .typing span { width:8px; height:8px; background:#6b7280; border-radius:50%; display:inline-block; opacity:.4; animation: vivid-blink 1.2s infinite both; }
   #${WIDGET_ID} .typing span:nth-child(2) { animation-delay:.2s; }
@@ -179,7 +179,7 @@ function setOnceFlag(flagKey: string) {
   } catch {}
 }
 
-// ---- Small fetch helper for JSON with timeout ----
+// ---- Small fetch helper (Option A: no custom request headers) ----
 async function fetchJSON<T>(
   url: string,
   opts?: RequestInit,
@@ -187,29 +187,23 @@ async function fetchJSON<T>(
 ): Promise<T> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
-  // cache-bust param
-  const bust = url.includes("?")
-    ? "&__ts=" + Date.now()
-    : "?__ts=" + Date.now();
-  const finalUrl = url + bust;
+  const finalUrl = url + (url.includes("?") ? "&" : "?") + "__ts=" + Date.now();
 
   try {
     let res = await fetch(finalUrl, {
       ...opts,
       signal: ctrl.signal,
       credentials: "omit",
-      cache: "no-store", // ← prevent 304 and stale cache
-      headers: { ...(opts?.headers || {}), "cache-control": "no-cache" }, // hint to proxies
+      cache: "no-store", // request directive (no extra headers)
     });
 
-    // If some proxy still returns 304, retry once with a stronger bust
+    // If a proxy still returns 304, retry once with extra bust
     if (res.status === 304) {
       res = await fetch(finalUrl + "&_=" + Math.random(), {
         ...opts,
         signal: ctrl.signal,
         credentials: "omit",
         cache: "no-store",
-        headers: { ...(opts?.headers || {}), "cache-control": "no-cache" },
       });
     }
 
@@ -224,15 +218,14 @@ async function fetchJSON<T>(
 function looksLikeProductQuery(text: string): boolean {
   const q = text.toLowerCase();
   return (
-    /product|price|sku|sign|banner|label|shirt|hat|sticker|decal|yard|stake|flag|poster|magnet|vinyl|wrap|business card|brochure|flyer|shirt|apparel|embroidery/.test(
+    /product|price|sku|sign|banner|label|sticker|decal|yard|stake|flag|poster|magnet|vinyl|wrap|business card|brochure|flyer|shirt|apparel|embroidery/.test(
       q
-    ) || /^[a-z0-9\-_]{4,}$/i.test(text) // SKU-ish tokens
+    ) || /^[a-z0-9\-_]{4,}$/i.test(text)
   );
 }
 
 // ---- Widget ----
 export function initChatWidget(userOpts: Options = {}) {
-  // defaults (title fixed, black header w/ white text)
   const opts: Options = {
     title: "Prisma Assistant",
     welcomeOnce: true,
@@ -258,7 +251,6 @@ export function initChatWidget(userOpts: Options = {}) {
   const siteName = opts.siteName ?? (document.title || "Vivid Store");
   const debug = !!opts.debug;
 
-  // Decide which catalog site to query for product info
   const defaultCatalog = location.hostname.endsWith("vivid-think.com")
     ? location.origin
     : "";
@@ -337,7 +329,7 @@ export function initChatWidget(userOpts: Options = {}) {
 
   widget.appendChild(bubble);
   widget.appendChild(panel);
-  shadow.appendChild(widget); // Shadow DOM attach
+  shadow.appendChild(widget);
 
   function setOpen(v: boolean) {
     open = v;
@@ -359,7 +351,6 @@ export function initChatWidget(userOpts: Options = {}) {
     { role: "system", content: systemPrompt(siteName, business) },
   ];
 
-  // Render history (skip system)
   if (messages.length && messages[0].role === "system") {
     for (const m of messages.slice(1))
       addMsg(m.role as "user" | "assistant", m.content);
@@ -397,7 +388,7 @@ export function initChatWidget(userOpts: Options = {}) {
     sendBtn.disabled = true;
     showTyping();
 
-    // --- NEW: try product search interception first ---
+    // --- Product search interception ---
     if (productSearchEnabled && catalogSite && looksLikeProductQuery(text)) {
       try {
         const url = `${ASSISTANT_BASE}/api/products?site=${encodeURIComponent(
@@ -426,7 +417,6 @@ export function initChatWidget(userOpts: Options = {}) {
           return;
         }
 
-        // Render cards with “Details” actions
         const html = renderProductListHTML(data.items);
         addMsgHTML(
           "assistant",
@@ -435,8 +425,6 @@ export function initChatWidget(userOpts: Options = {}) {
           <div>${html}</div>
         `
         );
-
-        // Wire up buttons
         bindProductDetailButtons();
 
         messages.push({
@@ -444,7 +432,7 @@ export function initChatWidget(userOpts: Options = {}) {
           content: `[${data.items.length} product results for "${data.query}"]`,
         });
         snapshot();
-        return; // don’t hit the LLM for this turn
+        return;
       } catch (e: any) {
         hideTyping();
         sendBtn.disabled = false;
@@ -459,7 +447,7 @@ export function initChatWidget(userOpts: Options = {}) {
       }
     }
 
-    // --- Normal LLM flow (fallback) ---
+    // --- Normal LLM flow ---
     try {
       const reply = await sendChat(apiBase, business, messages);
       hideTyping();
@@ -499,7 +487,6 @@ export function initChatWidget(userOpts: Options = {}) {
     log.scrollTop = log.scrollHeight;
   }
 
-  // NEW: HTML-capable assistant bubble (for product cards)
   function addMsgHTML(role: "assistant", html: string) {
     const el = document.createElement("div");
     el.className = `msgHTML ${role}`;
@@ -540,7 +527,7 @@ export function initChatWidget(userOpts: Options = {}) {
     }
   }
 
-  // ---------- Product helpers (render + details) ----------
+  // ---------- Product helpers ----------
 
   type Product = {
     id: string;
@@ -557,7 +544,7 @@ export function initChatWidget(userOpts: Options = {}) {
       .map((p) => {
         const price =
           typeof p.price === "number" && p.price > 0
-            ? `$${(p.price as number).toFixed(2)}`
+            ? `$${p.price.toFixed(2)}`
             : "";
         const img = p.imageUrl ? `<img src="${p.imageUrl}" alt="" />` : "";
         const view = p.url
@@ -617,7 +604,7 @@ export function initChatWidget(userOpts: Options = {}) {
   function renderProductDetailHTML(p: Product): string {
     const price =
       typeof p.price === "number" && p.price > 0
-        ? `$${(p.price as number).toFixed(2)}`
+        ? `$${p.price.toFixed(2)}`
         : "";
     const img = p.imageUrl ? `<img src="${p.imageUrl}" alt="" />` : "";
     const desc = p.desc
