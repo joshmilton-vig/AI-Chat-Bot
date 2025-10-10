@@ -14,7 +14,7 @@ type Product = {
 };
 
 const PRODUCT_API_BASE =
-  process.env.PRODUCT_API_BASE ?? "https://storefront.example.com";
+  process.env.PRODUCT_API_BASE ?? "https://demo.vivid-think.com";
 const PRODUCT_API_KEY = process.env.PRODUCT_API_KEY ?? "";
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "")
