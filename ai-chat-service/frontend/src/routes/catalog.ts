@@ -15,18 +15,43 @@ type Product = {
   desc?: string;
 };
 
-// ---------- Config ----------
-const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "")
-  .split(",")
+// ---------- CORS (wildcards + Cache-Control allowed) ----------
+const rawAllowed = (process.env.ALLOWED_ORIGINS ?? "")
+  .split(/[,\s]+/)
   .map((s) => s.trim())
   .filter(Boolean);
 
+function escapeRegex(s: string) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function wildcardToRegex(pat: string) {
+  if (pat === "*") return /^.*$/; // allow all
+  return new RegExp("^" + escapeRegex(pat).replace(/\\\*/g, ".*") + "$");
+}
+const originRegexes = rawAllowed.map(wildcardToRegex);
+
+function isOriginAllowed(origin?: string): boolean {
+  if (!origin) return true; // non-CORS (curl/server-to-server)
+  try {
+    const u = new URL(origin);
+    const normalized = `${u.protocol}//${u.host}`;
+    if (originRegexes.length === 0) return true;
+    return originRegexes.some((rx) => rx.test(normalized));
+  } catch {
+    return false;
+  }
+}
+
 const corsMiddleware = cors({
   origin(origin, cb) {
-    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+    if (isOriginAllowed(origin || undefined)) return cb(null, true);
     return cb(new Error(`CORS blocked for origin: ${origin}`));
   },
   credentials: true,
+  methods: ["GET", "OPTIONS"],
+  // ⬇️ allow Cache-Control so preflight succeeds if the browser sends it
+  allowedHeaders: ["Content-Type", "Authorization", "Cache-Control"],
+  maxAge: 86400,
 });
 
 // Optional: per-host read-only session cookies for login-gated catalogs
@@ -107,13 +132,12 @@ function extractProductsFromCatalogHTML(origin: URL, html: string): Product[] {
     } catch {}
   });
 
-  // Tailored + generic DOM selection
   const items: Product[] = [];
   const seen = new Set<string>();
 
-  // DEMO pattern: anchors to /catalog/2-customize.php plus common fallbacks
+  // DEMO pattern + generic fallbacks
   const linkSel = [
-    'a[href*="/catalog/2-customize.php"]', // demo + many Presswise templates
+    'a[href*="/catalog/2-customize.php"]', // demo/Presswise customize pages
     'a[href*="/product/"]',
     ".product-item a",
     ".productBox a",
@@ -275,7 +299,9 @@ function extractProductDetailHTML(origin: URL, html: string): Product {
 
 // ---------- Routes ----------
 export function mountCatalogRoutes(app: express.Express) {
+  // CORS + preflight for everything under /api
   app.use("/api", corsMiddleware);
+  app.options("/api/*", corsMiddleware);
 
   // Search products on a given vivid-think catalog
   // GET /api/products?site=https://brand.vivid-think.com&q=banner&limit=8
@@ -301,7 +327,7 @@ export function mountCatalogRoutes(app: express.Express) {
       // Presswise/your sites commonly support this search pattern:
       const searchUrl = new URL(siteUrl.toString());
       searchUrl.searchParams.set("search", q);
-      // Optional flags seen in your stack:
+      // Known flags in this ecosystem:
       searchUrl.searchParams.set("g", "0");
       searchUrl.searchParams.set("y", "0");
       searchUrl.searchParams.set("p", "0");
