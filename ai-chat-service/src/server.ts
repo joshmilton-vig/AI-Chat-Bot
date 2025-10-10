@@ -6,8 +6,8 @@ import morgan from "morgan";
 import OpenAI from "openai";
 import path from "path";
 import { fileURLToPath } from "url";
-import fetch from "node-fetch"; // ← added
-import * as cheerio from "cheerio"; // ← added
+import fetch from "node-fetch";
+import * as cheerio from "cheerio";
 
 import { BUSINESSES } from "./data/businesses";
 import { cannedReply } from "./logic/canned";
@@ -29,13 +29,19 @@ const ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || "")
   .map((s) => s.trim())
   .filter(Boolean);
 
+// ---------- Optional per-host service cookies (for login-gated catalogs) ----------
+const HOST_COOKIES: Record<string, string | undefined> = {
+  // Example: read-only session for a gated catalog (keep least privilege)
+  "smallcakes.vivid-think.com": process.env.SMALLCAKES_SESSION_COOKIE, // e.g. "PHPSESSID=abc123; Path=/; Secure; HttpOnly"
+  // Add more hosts here as needed
+};
+
 // ---------- Types ----------
 export type ChatMsg = {
   role: "system" | "user" | "assistant";
   content: string;
 };
 
-// For catalog endpoints
 type Product = {
   id: string;
   sku?: string;
@@ -45,6 +51,10 @@ type Product = {
   url?: string;
   desc?: string;
 };
+
+// Extractor type split: list vs detail
+type CatalogListExtractor = (origin: URL, html: string) => Product[];
+type CatalogDetailExtractor = (origin: URL, html: string) => Product;
 
 // ---------- Helpers (CORS) ----------
 function escapeRegex(s: string) {
@@ -73,7 +83,7 @@ function isOriginAllowed(origin: string | undefined): boolean {
 const app = express();
 app.disable("x-powered-by");
 
-// Health check endpoint
+// Health check endpoint (extra)
 app.get("/api/test", (_req, res) => {
   res.json({
     ok: true,
@@ -129,7 +139,7 @@ app.get("/healthz", (_req, res) => res.json({ ok: true }));
 //   /api/catalog-product?url=...
 // ===================================================================
 
-// Only allow HTTPS and hostnames that end with vivid-think.com
+// --- Security guard: https only + *.vivid-think.com ---
 function assertAllowedCatalogUrl(
   input: string,
   requireCatalogPath = true
@@ -137,17 +147,14 @@ function assertAllowedCatalogUrl(
   const u = new URL(input);
   if (u.protocol !== "https:") throw new Error("Only https is allowed");
   const host = u.hostname.toLowerCase();
-
   const allowed =
     host === "vivid-think.com" || host.endsWith(".vivid-think.com");
   if (!allowed) throw new Error("Host not allowed");
-
   if (requireCatalogPath && !u.pathname.startsWith("/catalog")) {
     throw new Error("Path must start with /catalog");
   }
   return u;
 }
-
 function toAbs(origin: URL, href?: string | null): string | undefined {
   if (!href) return undefined;
   try {
@@ -156,7 +163,6 @@ function toAbs(origin: URL, href?: string | null): string | undefined {
     return undefined;
   }
 }
-
 function cleanText(s?: string): string {
   return (s ?? "").replace(/\s+/g, " ").trim();
 }
@@ -166,11 +172,14 @@ function parsePrice(s?: string): number | undefined {
   return m ? Number(m[1]) : undefined;
 }
 
-// Parse catalog search HTML → Product[]
-function extractProductsFromCatalogHTML(origin: URL, html: string): Product[] {
+// ---------- Generic extractors (fallback for most sites) ----------
+function extractProductsFromCatalogHTML_Generic(
+  origin: URL,
+  html: string
+): Product[] {
   const $ = cheerio.load(html);
 
-  // 1) Prefer JSON-LD Product
+  // JSON-LD Products first
   const ldjson: Product[] = [];
   $('script[type="application/ld+json"]').each((_, el) => {
     try {
@@ -197,72 +206,78 @@ function extractProductsFromCatalogHTML(origin: URL, html: string): Product[] {
     } catch {}
   });
 
-  // 2) Heuristic DOM selection
-  const domProducts: Product[] = [];
-  const candidates = $(
-    'a[href*="/product/"], .product-item a, .productBox a'
-  ).toArray();
+  const items: Product[] = [];
   const seen = new Set<string>();
+  const linkSel = [
+    'a[href*="/product/"]',
+    ".product-item a",
+    ".productBox a",
+    'a[href*="/catalog/2-customize.php"]', // catch Presswise-style customize pages too
+  ].join(",");
 
-  for (const el of candidates) {
-    const a = $(el);
+  $(linkSel).each((_, aEl) => {
+    const a = $(aEl);
     const href = a.attr("href");
     const abs = href ? toAbs(origin, href) : undefined;
-    if (!abs || !/\/product\//.test(abs)) continue;
+    if (!abs) return;
 
+    const card = a.closest(".product-item, .productBox, li, div");
     const title =
       cleanText(a.attr("title")) ||
-      cleanText(a.find("h2,h3,.product-title,.title").first().text()) ||
+      cleanText(a.find("h1,h2,h3,.product-title,.title").first().text()) ||
+      cleanText(card.find("h1,h2,h3,.product-title,.title").first().text()) ||
       cleanText(a.text());
+    if (!title) return;
 
-    if (!title) continue;
-
-    const parent = a.closest(".product-item, .productBox, li, div");
-    const imgEl = parent.find("img").first();
+    const imgEl = a.find("img").first().length
+      ? a.find("img").first()
+      : card.find("img").first();
     const img = toAbs(origin, imgEl.attr("src") || imgEl.attr("data-src"));
 
-    const priceEl = parent
+    const priceEl = card
       .find('.price, .product-price, [class*="price"]')
       .first();
     const price = parsePrice(cleanText(priceEl.text()));
 
-    const skuMatch = cleanText(parent.text()).match(
-      /\bSKU[:\s]*([A-Za-z0-9\-\._]+)\b/i
+    const skuMatch = cleanText(card.text()).match(
+      /\bSKU[:\s]*([A-Za-z0-9\-_.]+)\b/i
     );
     const sku = skuMatch?.[1];
 
+    const rawDesc =
+      cleanText(card.find(".product-description,.desc,p,li").first().text()) ||
+      cleanText(card.clone().children().remove().end().text());
+
     const id = cleanText(sku || abs || title);
-    if (seen.has(id)) continue;
+    if (seen.has(id)) return;
     seen.add(id);
 
-    domProducts.push({
+    items.push({
       id,
       sku,
       name: title,
       price,
       imageUrl: img,
       url: abs,
-      desc: undefined,
+      desc: rawDesc || undefined,
     });
-  }
+  });
 
-  const items = ldjson.length ? ldjson : domProducts;
-
-  // de-dupe
-  const out: Product[] = [];
-  const dedupe = new Set<string>();
-  for (const p of items) {
-    const key = p.url || `${p.name}|${p.sku}`;
+  // Merge JSON-LD uniques
+  const dedupe = new Set<string>(
+    items.map((p) => p.url || `${p.name}|${p.sku || ""}`)
+  );
+  for (const p of ldjson) {
+    const key = p.url || `${p.name}|${p.sku || ""}`;
     if (key && !dedupe.has(key)) {
       dedupe.add(key);
-      out.push(p);
+      items.push(p);
     }
   }
-  return out;
+  return items;
 }
 
-// Parse product detail HTML → Product
-function extractProductDetailHTML(origin: URL, html: string): Product {
+function extractProductDetailHTML_Generic(origin: URL, html: string): Product {
   const $ = cheerio.load(html);
 
   let base: Partial<Product> = {};
@@ -292,13 +307,14 @@ function extractProductDetailHTML(origin: URL, html: string): Product {
 
   const name =
     base.name ||
-    cleanText($("h1, .product-title, .title").first().text()) ||
+    cleanText($("h1,.product-title,.title").first().text()) ||
+    cleanText($("h2,h3").first().text()) ||
     "Untitled";
 
   const sku =
     base.sku ||
     cleanText(
-      $("*:contains('SKU')")
+      $(":contains('SKU')")
         .filter((_, e) => /sku/i.test($(e).text()))
         .first()
         .text()
@@ -308,20 +324,234 @@ function extractProductDetailHTML(origin: URL, html: string): Product {
   const price =
     base.price ||
     parsePrice(
-      cleanText($('.price, .product-price, [class*="price"]').first().text())
+      cleanText($('.price,.product-price,[class*="price"]').first().text())
     );
 
   const desc =
     base.desc ||
-    cleanText(
-      $("#description, .product-description, .description").first().text()
-    );
+    cleanText($("#description,.product-description,.desc").first().text()) ||
+    cleanText($("p,li").slice(0, 3).text());
 
   const img = base.imageUrl || toAbs(origin, $("img").first().attr("src"));
 
   const id = cleanText(sku || origin.toString() || name);
 
-  return { id, sku, name, price, imageUrl: img, url: origin.toString(), desc };
+  return {
+    id,
+    sku,
+    name,
+    price,
+    imageUrl: img,
+    url: origin.toString(),
+    desc: desc || undefined,
+  };
+}
+
+// ---------- Tailored extractor for demo.vivid-think.com ----------
+function extractProductsFromCatalogHTML_DEMO(
+  origin: URL,
+  html: string
+): Product[] {
+  const $ = cheerio.load(html);
+
+  // JSON-LD as first choice if present
+  const ldjson: Product[] = [];
+  $('script[type="application/ld+json"]').each((_, el) => {
+    try {
+      const obj = JSON.parse($(el).text());
+      const arr = Array.isArray(obj) ? obj : [obj];
+      arr.forEach((o: any) => {
+        if (o["@type"] === "Product" && o.name) {
+          ldjson.push({
+            id: cleanText(o.sku || o.productID || o.url || o.name),
+            sku: cleanText(o.sku),
+            name: cleanText(o.name),
+            price: parsePrice(
+              o?.offers?.price || o?.offers?.priceSpecification?.price
+            ),
+            imageUrl: toAbs(
+              origin,
+              Array.isArray(o.image) ? o.image[0] : o.image
+            ),
+            url: toAbs(origin, o.url),
+            desc: cleanText(o.description),
+          });
+        }
+      });
+    } catch {}
+  });
+
+  const items: Product[] = [];
+  const seen = new Set<string>();
+
+  // DEMO pattern: tiles link to /catalog/2-customize.php?... with H3 nearby
+  const linkSel = [
+    'a[href*="/catalog/2-customize.php"]', // demo customize pages
+    // keep fallbacks just in case:
+    ".product-item a",
+    ".productBox a",
+    'a[href*="/product/"]',
+  ].join(",");
+
+  $(linkSel).each((_, aEl) => {
+    const a = $(aEl);
+    const href = a.attr("href");
+    const abs = href ? toAbs(origin, href) : undefined;
+    if (!abs) return;
+
+    const card = a.closest(".product-item, .productBox, li, div");
+
+    const title =
+      cleanText(a.attr("title")) ||
+      cleanText(a.find("h1,h2,h3,.product-title,.title").first().text()) ||
+      cleanText(card.find("h1,h2,h3,.product-title,.title").first().text()) ||
+      cleanText(a.text());
+    if (!title) return;
+
+    const imgEl = a.find("img").first().length
+      ? a.find("img").first()
+      : card.find("img").first();
+    const img = toAbs(origin, imgEl.attr("src") || imgEl.attr("data-src"));
+
+    const priceEl = card
+      .find('.price, .product-price, [class*="price"]')
+      .first();
+    const price = parsePrice(cleanText(priceEl.text()));
+
+    const skuMatch = cleanText(card.text()).match(
+      /\bSKU[:\s]*([A-Za-z0-9\-_.]+)\b/i
+    );
+    const sku = skuMatch?.[1];
+
+    const rawDesc =
+      cleanText(card.find(".product-description,.desc,p,li").first().text()) ||
+      cleanText(card.clone().children().remove().end().text());
+
+    const id = cleanText(sku || abs || title);
+    if (seen.has(id)) return;
+    seen.add(id);
+
+    items.push({
+      id,
+      sku,
+      name: title,
+      price,
+      imageUrl: img,
+      url: abs,
+      desc: rawDesc || undefined,
+    });
+  });
+
+  // Merge JSON-LD uniques
+  const dedupe = new Set<string>(
+    items.map((p) => p.url || `${p.name}|${p.sku || ""}`)
+  );
+  for (const p of ldjson) {
+    const key = p.url || `${p.name}|${p.sku || ""}`;
+    if (key && !dedupe.has(key)) {
+      dedupe.add(key);
+      items.push(p);
+    }
+  }
+  return items;
+}
+
+function extractProductDetailHTML_DEMO(origin: URL, html: string): Product {
+  const $ = cheerio.load(html);
+
+  let base: Partial<Product> = {};
+  $('script[type="application/ld+json"]').each((_, el) => {
+    try {
+      const obj = JSON.parse($(el).text());
+      const arr = Array.isArray(obj) ? obj : [obj];
+      const prod = arr.find((o: any) => o["@type"] === "Product");
+      if (prod) {
+        base = {
+          id: cleanText(prod.sku || prod.productID || prod.url || prod.name),
+          sku: cleanText(prod.sku),
+          name: cleanText(prod.name),
+          price: parsePrice(
+            prod?.offers?.price || prod?.offers?.priceSpecification?.price
+          ),
+          imageUrl: toAbs(
+            origin,
+            Array.isArray(prod.image) ? prod.image[0] : prod.image
+          ),
+          url: toAbs(origin, prod.url) || origin.toString(),
+          desc: cleanText(prod.description),
+        };
+      }
+    } catch {}
+  });
+
+  const name =
+    base.name ||
+    cleanText($("h1,.product-title,.title").first().text()) ||
+    cleanText($("h2,h3").first().text()) ||
+    "Untitled";
+
+  const sku =
+    base.sku ||
+    cleanText(
+      $(":contains('SKU')")
+        .filter((_, e) => /sku/i.test($(e).text()))
+        .first()
+        .text()
+    ).replace(/.*sku[:\s]*/i, "") ||
+    undefined;
+
+  const price =
+    base.price ||
+    parsePrice(
+      cleanText($('.price,.product-price,[class*="price"]').first().text())
+    );
+
+  const desc =
+    base.desc ||
+    cleanText($("#description,.product-description,.desc").first().text()) ||
+    cleanText($("p,li").slice(0, 3).text());
+
+  const img = base.imageUrl || toAbs(origin, $("img").first().attr("src"));
+
+  const id = cleanText(sku || origin.toString() || name);
+
+  return {
+    id,
+    sku,
+    name,
+    price,
+    imageUrl: img,
+    url: origin.toString(),
+    desc: desc || undefined,
+  };
+}
+
+// ---------- Host-based extractor lookup ----------
+const HOST_EXTRACTORS_LIST: Array<
+  [string | RegExp, CatalogListExtractor, CatalogDetailExtractor]
+> = [
+  // [hostMatch, listExtractor, detailExtractor]
+  [
+    "demo.vivid-think.com",
+    extractProductsFromCatalogHTML_DEMO,
+    extractProductDetailHTML_DEMO,
+  ],
+  // Add more overrides here if a brand has a unique DOM
+];
+
+function getExtractorsForHost(host: string): {
+  list: CatalogListExtractor;
+  detail: CatalogDetailExtractor;
+} {
+  for (const [match, list, detail] of HOST_EXTRACTORS_LIST) {
+    if (typeof match === "string" ? match === host : match.test(host)) {
+      return { list, detail };
+    }
+  }
+  return {
+    list: extractProductsFromCatalogHTML_Generic,
+    detail: extractProductDetailHTML_Generic,
+  };
 }
 
 // --- Routes: Search products on a vivid-think catalog
@@ -341,17 +571,22 @@ app.get("/api/products", async (req, res) => {
       `${site.replace(/\/$/, "")}/catalog`,
       true
     );
+    const host = siteUrl.hostname;
 
     const searchUrl = new URL(siteUrl.toString());
     searchUrl.searchParams.set("search", q);
-    // mirrors your typical storefront params
+    // Common Presswise-ish params your catalogs use
     searchUrl.searchParams.set("g", "0");
     searchUrl.searchParams.set("y", "0");
     searchUrl.searchParams.set("p", "0");
     searchUrl.searchParams.set("m", "g");
 
+    const cookie = HOST_COOKIES[host];
     const r = await fetch(searchUrl.toString(), {
-      headers: { accept: "text/html" },
+      headers: {
+        accept: "text/html",
+        ...(cookie ? { cookie } : {}),
+      },
       // @ts-ignore
       timeout: 10000,
     });
@@ -361,10 +596,13 @@ app.get("/api/products", async (req, res) => {
         .json({ error: `Upstream error (${r.status})` });
 
     const html = await r.text();
-    const items = extractProductsFromCatalogHTML(new URL(site), html).slice(
-      0,
-      limit
-    );
+
+    const { list } = getExtractorsForHost(host);
+    const productsMaybe = list(new URL(site), html);
+    const items = Array.isArray(productsMaybe)
+      ? productsMaybe.slice(0, limit)
+      : []; // defensive
+
     res.json({ site: siteUrl.origin, query: q, count: items.length, items });
   } catch (e: any) {
     res.status(400).json({ error: e?.message ?? "Bad request" });
@@ -372,16 +610,21 @@ app.get("/api/products", async (req, res) => {
 });
 
 // --- Routes: Product detail (must still be on *.vivid-think.com)
-// GET /api/catalog-product?url=https://brand.vivid-think.com/product/...
+// GET /api/catalog-product?url=https://brand.vivid-think.com/product/... or /catalog/2-customize.php?...
 app.get("/api/catalog-product", async (req, res) => {
   try {
     const url = String(req.query.url ?? "");
     if (!url) return res.status(400).json({ error: "Missing url" });
 
     const productUrl = assertAllowedCatalogUrl(url, false);
+    const host = productUrl.hostname;
 
+    const cookie = HOST_COOKIES[host];
     const r = await fetch(productUrl.toString(), {
-      headers: { accept: "text/html" },
+      headers: {
+        accept: "text/html",
+        ...(cookie ? { cookie } : {}),
+      },
       // @ts-ignore
       timeout: 10000,
     });
@@ -391,7 +634,9 @@ app.get("/api/catalog-product", async (req, res) => {
         .json({ error: `Upstream error (${r.status})` });
 
     const html = await r.text();
-    const product = extractProductDetailHTML(productUrl, html);
+
+    const { detail } = getExtractorsForHost(host);
+    const product = detail(productUrl, html);
     res.json(product);
   } catch (e: any) {
     res.status(400).json({ error: e?.message ?? "Bad request" });
