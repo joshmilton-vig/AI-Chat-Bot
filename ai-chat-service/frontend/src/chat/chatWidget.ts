@@ -9,25 +9,37 @@ const ASSISTANT_BASE = "https://ai-chat-bot-1xm4.onrender.com"; // ← your Rend
 
 // ---- Extended options (non-breaking) ----
 type Theme = {
-  primary?: string; // main brand color (bubble, send button, user msg)
-  surface?: string; // panel/log background
-  text?: string; // default text color (panels)
-  assistantBubble?: string; // assistant bubble bg
-  userText?: string; // user bubble text color
-  headerBg?: string; // header background
-  headerText?: string; // header text color
-  bubbleColor?: string; // floating launcher bubble color
+  primary?: string;
+  surface?: string;
+  text?: string;
+  assistantBubble?: string;
+  userText?: string;
+  headerBg?: string;
+  headerText?: string;
+  bubbleColor?: string;
 };
 type ExtraOptions = {
-  title?: string; // header title (default "Prisma Assistant")
-  iconSVG?: string; // custom bubble icon SVG
-  welcomeMessage?: string; // assistant message on first open
-  welcomeOnce?: boolean; // show welcome only once (default true)
-  autoOpenDelay?: number; // ms; if provided, open after delay
-  autoOpenOnce?: boolean; // only auto-open on first visit (default true)
-  persist?: boolean; // keep chat history in localStorage (default true)
-  storageKey?: string; // localStorage key (default "vivid_chat_session")
-  theme?: Theme; // brand colors
+  title?: string;
+  iconSVG?: string;
+  welcomeMessage?: string;
+  welcomeOnce?: boolean;
+  autoOpenDelay?: number;
+  autoOpenOnce?: boolean;
+  persist?: boolean;
+  storageKey?: string;
+  theme?: Theme;
+
+  /** NEW: base catalog site (must be https://*.vivid-think.com). Example: https://toastedyolk.vivid-think.com */
+  catalogSite?: string;
+
+  /** Optional: limit results shown in product search (default 6) */
+  productLimit?: number;
+
+  /** Optional: disable product search interception */
+  disableProductSearch?: boolean;
+
+  /** Debug logging */
+  debug?: boolean;
 };
 type Options = InitChatOptions & ExtraOptions;
 
@@ -99,6 +111,8 @@ function injectStyles(vars: Record<string, string>) {
   #${WIDGET_ID} .msg.user { align-self: flex-end; background: var(--va-primary); color: var(--va-user-text); border-top-right-radius: 4px; }
   #${WIDGET_ID} .msg.assistant { align-self: flex-start; background: var(--va-assistant-bubble); color: var(--va-text); border-top-left-radius: 4px; }
 
+  #${WIDGET_ID} .msgHTML.assistant { align-self: flex-start; background: var(--va-assistant-bubble); color: var(--va-text); border-top-left-radius: 4px; padding: 8px 10px; border-radius: 10px; max-width: 100%; }
+
   #${WIDGET_ID} footer { border-top: 1px solid #f0f0f0; padding: 8px; display:flex; gap:6px; background: var(--va-surface); }
   #${WIDGET_ID} textarea {
     -webkit-appearance:none; appearance:none; resize:none; flex:1; min-height:40px; max-height:140px;
@@ -109,6 +123,17 @@ function injectStyles(vars: Record<string, string>) {
     border-radius:10px; padding: 8px 12px; font-size:13px; cursor:pointer; line-height:1;
   }
   #${WIDGET_ID} .hint { font-size: 11px; color:#6b7280; padding: 6px 12px 10px; background: var(--va-surface); }
+
+  /* Product cards */
+  #${WIDGET_ID} .vivid-product-card { display:flex; align-items:center; margin:8px 0; padding:10px; border:1px solid #eee; border-radius:12px; gap:10px; background:#fff; }
+  #${WIDGET_ID} .vivid-product-card img { width:56px; height:56px; object-fit:cover; border-radius:8px; margin-right:10px; }
+  #${WIDGET_ID} .vivid-product-card .meta { flex:1; min-width:0; }
+  #${WIDGET_ID} .vivid-product-card .name { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #${WIDGET_ID} .vivid-product-card .sub { font-size:12px; color:#666; }
+  #${WIDGET_ID} .vivid-product-card .desc { font-size:12px; color:#777; max-height:2.6em; overflow:hidden; text-overflow:ellipsis; }
+
+  #${WIDGET_ID} .vivid-detail { border:1px solid #eee; border-radius:12px; padding:14px; background:#fff; }
+  #${WIDGET_ID} .vivid-detail img { width:96px; height:96px; object-fit:cover; border-radius:12px; }
 
   /* Typing indicator bubble (inline in log, after user msg) */
   #${WIDGET_ID} .typing { align-self: flex-start; display:flex; align-items:center; gap:6px; padding:8px 12px; margin:2px 0 0 0; background:#f3f4f6; border-radius:16px; width:fit-content; }
@@ -154,6 +179,37 @@ function setOnceFlag(flagKey: string) {
   } catch {}
 }
 
+// ---- Small fetch helper for JSON with timeout ----
+async function fetchJSON<T>(
+  url: string,
+  opts?: RequestInit,
+  timeoutMs = 10000
+): Promise<T> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      ...opts,
+      signal: ctrl.signal,
+      credentials: "omit",
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return (await res.json()) as T;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// ---- Product intent detector ----
+function looksLikeProductQuery(text: string): boolean {
+  const q = text.toLowerCase();
+  return (
+    /product|price|sku|sign|banner|label|shirt|hat|sticker|decal|yard|stake|flag|poster|magnet|vinyl|wrap|business card|brochure|flyer|shirt|apparel|embroidery/.test(
+      q
+    ) || /^[a-z0-9\-_]{4,}$/i.test(text) // SKU-ish tokens
+  );
+}
+
 // ---- Widget ----
 export function initChatWidget(userOpts: Options = {}) {
   // defaults (title fixed, black header w/ white text)
@@ -170,22 +226,30 @@ export function initChatWidget(userOpts: Options = {}) {
       text: "#111",
       assistantBubble: "#f6f6f7",
       userText: "#fff",
-      headerBg: "#000", // black header
-      headerText: "#fff", // white header text
+      headerBg: "#000",
+      headerText: "#fff",
     },
+    productLimit: 6,
     ...userOpts,
   };
 
   const apiBase = opts.apiBase ?? "/api/ai";
   const business = opts.business ?? inferBusinessFromHost();
-  const siteName = opts.siteName ?? (document.title || "Vivid Store"); // used for analytics only
+  const siteName = opts.siteName ?? (document.title || "Vivid Store");
   const debug = !!opts.debug;
+
+  // Decide which catalog site to query for product info
+  const defaultCatalog = location.hostname.endsWith("vivid-think.com")
+    ? location.origin
+    : "";
+  const catalogSite = (opts.catalogSite || defaultCatalog).replace(/\/$/, "");
+  const productLimit = Math.max(1, Math.min(24, opts.productLimit || 6));
+  const productSearchEnabled = !opts.disableProductSearch;
 
   // ---- Persist across navigation; clear only on NEW tab session ----
   const KEY = getStoreKey(opts.storageKey);
   const SESSION_FLAG = "vivid_chat_active_session";
   if (!sessionStorage.getItem(SESSION_FLAG)) {
-    // New tab session starts now -> clear any stale chat from previous tab
     localStorage.removeItem(KEY);
   }
   sessionStorage.setItem(SESSION_FLAG, "1");
@@ -292,7 +356,7 @@ export function initChatWidget(userOpts: Options = {}) {
     typingEl = document.createElement("div");
     typingEl.className = "typing";
     typingEl.innerHTML = "<span></span><span></span><span></span>";
-    log.appendChild(typingEl); // appears AFTER the user message
+    log.appendChild(typingEl);
     log.scrollTop = log.scrollHeight;
   }
   function hideTyping() {
@@ -304,6 +368,7 @@ export function initChatWidget(userOpts: Options = {}) {
   async function doSend() {
     const text = ta.value.trim();
     if (!text) return;
+
     addMsg("user", text);
     messages.push({ role: "user", content: text });
     snapshot();
@@ -312,6 +377,69 @@ export function initChatWidget(userOpts: Options = {}) {
     sendBtn.disabled = true;
     showTyping();
 
+    // --- NEW: try product search interception first ---
+    if (productSearchEnabled && catalogSite && looksLikeProductQuery(text)) {
+      try {
+        const url = `${ASSISTANT_BASE}/api/products?site=${encodeURIComponent(
+          catalogSite
+        )}&q=${encodeURIComponent(text)}&limit=${productLimit}`;
+        const data = await fetchJSON<{
+          site: string;
+          query: string;
+          count: number;
+          items: Product[];
+        }>(url);
+
+        hideTyping();
+        sendBtn.disabled = false;
+
+        if (!data.items?.length) {
+          addMsg(
+            "assistant",
+            `I didn’t find any matching products for “${text}”.`
+          );
+          messages.push({
+            role: "assistant",
+            content: `No products found for "${text}"`,
+          });
+          snapshot();
+          return;
+        }
+
+        // Render cards with “Details” actions
+        const html = renderProductListHTML(data.items);
+        addMsgHTML(
+          "assistant",
+          `
+          <div>Here’s what I found for “${escapeHtml(data.query)}”:</div>
+          <div>${html}</div>
+        `
+        );
+
+        // Wire up buttons
+        bindProductDetailButtons();
+
+        messages.push({
+          role: "assistant",
+          content: `[${data.items.length} product results for "${data.query}"]`,
+        });
+        snapshot();
+        return; // don’t hit the LLM for this turn
+      } catch (e: any) {
+        hideTyping();
+        sendBtn.disabled = false;
+        if (debug) console.warn("Product search failed:", e);
+        addMsg("assistant", "Product search is unavailable right now.");
+        messages.push({
+          role: "assistant",
+          content: "Product search unavailable",
+        });
+        snapshot();
+        return;
+      }
+    }
+
+    // --- Normal LLM flow (fallback) ---
     try {
       const reply = await sendChat(apiBase, business, messages);
       hideTyping();
@@ -351,6 +479,15 @@ export function initChatWidget(userOpts: Options = {}) {
     log.scrollTop = log.scrollHeight;
   }
 
+  // NEW: HTML-capable assistant bubble (for product cards)
+  function addMsgHTML(role: "assistant", html: string) {
+    const el = document.createElement("div");
+    el.className = `msgHTML ${role}`;
+    el.innerHTML = html;
+    log.appendChild(el);
+    log.scrollTop = log.scrollHeight;
+  }
+
   function emitAnalytics(eventName: string, payload: Record<string, any>) {
     (window as any).dataLayer = (window as any).dataLayer || [];
     (window as any).dataLayer.push({
@@ -366,6 +503,9 @@ export function initChatWidget(userOpts: Options = {}) {
       apiBase,
       business,
       siteName,
+      catalogSite,
+      productLimit,
+      productSearchEnabled,
       options: opts,
     });
 
@@ -379,13 +519,117 @@ export function initChatWidget(userOpts: Options = {}) {
       }, Math.max(0, opts.autoOpenDelay));
     }
   }
+
+  // ---------- Product helpers (render + details) ----------
+
+  type Product = {
+    id: string;
+    sku?: string;
+    name: string;
+    price?: number;
+    imageUrl?: string;
+    url?: string;
+    desc?: string;
+  };
+
+  function renderProductListHTML(items: Product[]): string {
+    return items
+      .map((p) => {
+        const price =
+          typeof p.price === "number" && p.price > 0
+            ? `$${(p.price as number).toFixed(2)}`
+            : "";
+        const img = p.imageUrl ? `<img src="${p.imageUrl}" alt="" />` : "";
+        const view = p.url
+          ? `<a href="${p.url}" target="_blank" rel="noopener">View</a>`
+          : "";
+        return `
+          <div class="vivid-product-card">
+            ${img}
+            <div class="meta">
+              <div class="name">${escapeHtml(p.name)}</div>
+              <div class="sub">${escapeHtml(p.sku || "")} ${
+          price ? `• ${price}` : ""
+        }</div>
+              ${p.desc ? `<div class="desc">${escapeHtml(p.desc)}</div>` : ""}
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px;white-space:nowrap;">
+              ${view}
+              ${
+                p.url
+                  ? `<button class="vivid-product-detail" data-url="${encodeURIComponent(
+                      p.url
+                    )}">Details</button>`
+                  : ""
+              }
+            </div>
+          </div>
+        `;
+      })
+      .join("");
+  }
+
+  function bindProductDetailButtons() {
+    const btns = SHADOW!.querySelectorAll<HTMLButtonElement>(
+      `#${WIDGET_ID} .vivid-product-detail`
+    );
+    btns.forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const url = decodeURIComponent(btn.dataset.url || "");
+        if (!url) return;
+        btn.disabled = true;
+        try {
+          const detail = await fetchJSON<Product>(
+            `${ASSISTANT_BASE}/api/catalog-product?url=${encodeURIComponent(
+              url
+            )}`
+          );
+          addMsgHTML("assistant", renderProductDetailHTML(detail));
+        } catch (e: any) {
+          addMsg("assistant", "Sorry — couldn’t load product details.");
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    });
+  }
+
+  function renderProductDetailHTML(p: Product): string {
+    const price =
+      typeof p.price === "number" && p.price > 0
+        ? `$${(p.price as number).toFixed(2)}`
+        : "";
+    const img = p.imageUrl ? `<img src="${p.imageUrl}" alt="" />` : "";
+    const desc = p.desc
+      ? `<div style="margin-top:6px;">${escapeHtml(p.desc)}</div>`
+      : "";
+    const link = p.url
+      ? `<div style="margin-top:10px;"><a href="${p.url}" target="_blank" rel="noopener">Open product page</a></div>`
+      : "";
+    return `
+      <div class="vivid-detail">
+        <div style="display:flex;gap:12px;align-items:flex-start;">
+          ${img}
+          <div style="flex:1;">
+            <div style="font-weight:700;font-size:16px;">${escapeHtml(
+              p.name
+            )}</div>
+            <div style="font-size:12px;color:#666;margin:4px 0;">${escapeHtml(
+              p.sku || ""
+            )} ${price ? `• ${price}` : ""}</div>
+            ${desc}
+            ${link}
+          </div>
+        </div>
+      </div>
+    `;
+  }
 }
 
 // ---- Utils ----
 function svgChatIcon() {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zM6 9h12v2H6V9zm0-4h12v2H6V5zm0 8h8v2H6v-2z"/></svg>`;
 }
-
 function inferBusinessFromHost(): string {
   const h = location.hostname.toLowerCase();
   if (h.includes("vividnola")) return "vividnola";
@@ -393,7 +637,6 @@ function inferBusinessFromHost(): string {
   if (h.includes("celtic")) return "celtic";
   return "vivid";
 }
-
 function systemPrompt(siteName: string, business: string) {
   return [
     `You are Prisma storefront assistant for ${siteName} (business: ${business}).`,
@@ -402,4 +645,13 @@ function systemPrompt(siteName: string, business: string) {
     `Limitations: no PII, no quoting specific prices unless plainly shown on page, no legal/medical advice.`,
     `If unsure, offer to escalate to customer service: sales@vividink.com.`,
   ].join("\n");
+}
+function escapeHtml(s: string) {
+  return s.replace(
+    /[&<>"']/g,
+    (m) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[
+        m
+      ]!)
+  );
 }
