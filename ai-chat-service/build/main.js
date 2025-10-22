@@ -275,10 +275,10 @@ var VividAssistant = (() => {
       I.appendChild(w),
       I.appendChild(g);
     let M = document.createElement("div");
-    (M.className = "hint"),
-      (M.textContent =
-        "Access your order status by logging in and clicking **My Account** (top right), then **View Orders**. If you can't find your order, let me know."),
-      v.appendChild(O),
+    M.className = "hint";
+    M.innerHTML = `Access your order status by logging in and clicking <strong>My Account</strong> (top right), then <strong>View Orders</strong>.<br>
+  <a href="https://${window.location.hostname}/account/orders.php" target="_blank" rel="noopener noreferrer">View My Orders</a>`;
+    v.appendChild(O),
       v.appendChild(c),
       v.appendChild(I),
       v.appendChild(M),

@@ -83,11 +83,10 @@ const RULES: Rule[] = [
       const host =
         typeof window !== "undefined"
           ? window.location.hostname
-          : "demo.vivid-think.com"; // fallback for server-side safety
+          : "demo.vivid-think.com"; // fallback for server-side rendering
       const url = `https://${host}/account/orders.php`;
-      return `You can check your order status by logging in and clicking the **My Account** button in the top right menu, then choosing **View Orders**.  
-
-You can also go directly here: [View My Orders](${url})`;
+      return `You can check your order status by logging in and clicking the <strong>My Account</strong> button in the top right menu, then choosing <strong>View Orders</strong>.<br><br>
+<a href="${url}" target="_blank" rel="noopener noreferrer">View My Orders</a>`;
     },
   },
 ];
