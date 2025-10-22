@@ -277,7 +277,7 @@ var VividAssistant = (() => {
     let M = document.createElement("div");
     (M.className = "hint"),
       (M.textContent =
-        "No order/account lookups. For payments or existing orders, contact support."),
+        "Access your order status by logging in and clicking **My Account** (top right), then **View Orders**. If you can't find your order, let me know."),
       v.appendChild(O),
       v.appendChild(c),
       v.appendChild(I),
@@ -529,7 +529,7 @@ var VividAssistant = (() => {
   function ve(t, e) {
     return [
       `You are Prisma storefront assistant for ${t} (business: ${e}).`,
-      "Be helpful, concise, and brand-safe. You cannot access accounts, orders, or payments.",
+      "Be helpful, concise, and brand-safe. Do not perform account/order/payment lookups; direct users to My Account > View Orders.",
       "Capabilities: explain products, materials, typical lead times, shipping options, design tips.",
       "Limitations: no PII, no quoting specific prices unless plainly shown on page, no legal/medical advice.",
       "If unsure, offer to escalate to customer service: sales@vividink.com.",

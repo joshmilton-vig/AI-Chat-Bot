@@ -7,7 +7,7 @@
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsup src/server.ts --format esm --dts --out-dir dist --clean && tsup src/chatWidget.ts --format iife --minify --out-dir build --outfile main.js",
+    "build": "tsup",
     "start": "node dist/server.js",
     "check": "tsc --noEmit",
     "build:all": "npm run build && cd frontend && npm install --no-audit --no-fund --include=dev && npm run build",
