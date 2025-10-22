@@ -319,8 +319,9 @@ export function initChatWidget(userOpts: Options = {}) {
 
   const hint = document.createElement("div");
   hint.className = "hint";
-  hint.textContent =
-    "No order/account lookups. For payments or existing orders, contact support.";
+  // Updated: clickable, dynamic link
+  hint.innerHTML = `Access your order status by logging in and clicking <strong>My Account</strong> (top right), then <strong>View Orders</strong>.<br>
+    <a href="https://${window.location.hostname}/account/orders.php" target="_blank" rel="noopener noreferrer">View My Orders</a>`;
 
   panel.appendChild(header);
   panel.appendChild(log);
@@ -454,7 +455,7 @@ export function initChatWidget(userOpts: Options = {}) {
       sendBtn.disabled = false;
 
       messages.push({ role: "assistant", content: reply });
-      addMsg("assistant", reply);
+      addAssistantMessageSmart(reply); // ⬅️ render HTML if present
       snapshot();
       emitAnalytics("vivid_chat_message", { role: "assistant" });
     } catch (err: any) {
@@ -465,7 +466,7 @@ export function initChatWidget(userOpts: Options = {}) {
         err?.message || "Network error"
       })`;
       messages.push({ role: "assistant", content: m });
-      addMsg("assistant", m);
+      addAssistantMessageSmart(m); // ⬅️ consistent rendering
       snapshot();
       if (debug) console.error(err);
     }
@@ -493,6 +494,16 @@ export function initChatWidget(userOpts: Options = {}) {
     el.innerHTML = html;
     log.appendChild(el);
     log.scrollTop = log.scrollHeight;
+  }
+
+  // NEW: smart renderer to allow clickable links in assistant replies
+  function addAssistantMessageSmart(text: string) {
+    // crude but effective: if it contains an HTML tag, treat as HTML
+    if (/<[a-z][\s\S]*>/i.test(text)) {
+      addMsgHTML("assistant", text);
+    } else {
+      addMsg("assistant", text);
+    }
   }
 
   function emitAnalytics(eventName: string, payload: Record<string, any>) {

@@ -21,11 +21,17 @@ var VividAssistant = (() => {
   var ce = (t) => de(P({}, "__esModule", { value: !0 }), t);
   var xe = {};
   re(xe, { mountVividChat: () => be });
+
+  // --- UPDATED: include siteHost in body ---
   async function U(t, e, r, d) {
     let o = await fetch(`${t}/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ business: e, messages: r }),
+      body: JSON.stringify({
+        business: e,
+        messages: r,
+        siteHost: window.location.hostname, // NEW
+      }),
       signal: d,
     });
     if (!o.ok) {
@@ -35,11 +41,13 @@ var VividAssistant = (() => {
     let m = await o.json();
     return String(m.message ?? "Sorry \u2014 I couldn\u2019t get a response.");
   }
+
   var q = "vivid-chat-style",
     i = "vivid-chat-widget",
     V = "vivid-chat-host",
     K = "https://ai-chat-bot-1xm4.onrender.com",
     N = null;
+
   function J() {
     let t = document.getElementById(V);
     return (
@@ -55,6 +63,7 @@ var VividAssistant = (() => {
       { host: t, shadow: N }
     );
   }
+
   function le(t) {
     let { shadow: e } = J(),
       r = e.getElementById(q);
@@ -138,6 +147,7 @@ var VividAssistant = (() => {
       o = document.createElement("style");
     (o.id = q), (o.textContent = d), e.appendChild(o);
   }
+
   function pe(t) {
     return t || "vivid_chat_session";
   }
@@ -201,6 +211,7 @@ var VividAssistant = (() => {
       ) || /^[a-z0-9\-_]{4,}$/i.test(t)
     );
   }
+
   function Y(t = {}) {
     let e = {
         title: "Prisma Assistant",
@@ -276,6 +287,7 @@ var VividAssistant = (() => {
       I.appendChild(g);
     let M = document.createElement("div");
     M.className = "hint";
+    // already clickable orders link
     M.innerHTML = `Access your order status by logging in and clicking <strong>My Account</strong> (top right), then <strong>View Orders</strong>.<br>
   <a href="https://${window.location.hostname}/account/orders.php" target="_blank" rel="noopener noreferrer">View My Orders</a>`;
     v.appendChild(O),
@@ -373,7 +385,8 @@ var VividAssistant = (() => {
           S(),
             (g.disabled = !1),
             l.push({ role: "assistant", content: a }),
-            h("assistant", a),
+            // --- UPDATED: render HTML replies as HTML ---
+            /<[a-z][\s\S]*>/i.test(a) ? R("assistant", a) : h("assistant", a),
             x(),
             ee("vivid_chat_message", { role: "assistant" });
         } catch (a) {
@@ -382,7 +395,8 @@ var VividAssistant = (() => {
             a?.message || "Network error"
           })`;
           l.push({ role: "assistant", content: s }),
-            h("assistant", s),
+            // keep consistent rendering
+            /<[a-z][\s\S]*>/i.test(s) ? R("assistant", s) : h("assistant", s),
             x(),
             m && console.error(a);
         }
@@ -392,6 +406,7 @@ var VividAssistant = (() => {
       w.addEventListener("keydown", (n) => {
         n.key === "Enter" && !n.shiftKey && (n.preventDefault(), j());
       });
+
     function h(n, a) {
       let s = document.createElement("div");
       (s.className = `msg ${n}`),

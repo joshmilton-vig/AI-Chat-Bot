@@ -1,16 +1,17 @@
-import type { ChatMessage } from "./types";
-
+// client.ts
 export async function sendChat(
   apiBase: string,
   business: string,
-  messages: ChatMessage[],
-  signal?: AbortSignal
-): Promise<string> {
+  messages: any[]
+) {
   const res = await fetch(`${apiBase}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ business, messages }),
-    signal,
+    body: JSON.stringify({
+      business,
+      messages,
+      siteHost: window.location.hostname, // 👈 add this
+    }),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
