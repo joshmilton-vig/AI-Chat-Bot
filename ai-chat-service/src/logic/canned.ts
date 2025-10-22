@@ -37,7 +37,7 @@ const RULES: Rule[] = [
       /^(hi|hello|hey|yo)\b/.test(t) ||
       /\b(good (morning|afternoon|evening))\b/.test(t),
     reply: (biz) =>
-      `Hi! I’m the ${biz.name} assistant. I can help with store hours, returns, shipping, and orders. What do you need?`,
+      `Hi! I’m the ${biz.name} Assistant. I can help with store hours, returns, shipping, and orders. What do you need?`,
   },
   {
     name: "thanks",
@@ -80,7 +80,7 @@ const RULES: Rule[] = [
         t
       ),
     reply: () =>
-      "I can help with order status. Please share your **order number** and **shipping ZIP code**.",
+      "You can check your order status by logging in and clicking the **My Account** button in the top right menu, then choosing **View Orders**. If you can’t find your order, just let me know and I’ll point you in the right direction!",
   },
 ];
 

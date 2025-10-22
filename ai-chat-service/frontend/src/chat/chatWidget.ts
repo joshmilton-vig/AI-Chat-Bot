@@ -650,7 +650,7 @@ function systemPrompt(siteName: string, business: string) {
     `Be helpful, concise, and brand-safe. You cannot access accounts, orders, or payments.`,
     `Capabilities: explain products, materials, typical lead times, shipping options, design tips.`,
     `Limitations: no PII, no quoting specific prices unless plainly shown on page, no legal/medical advice.`,
-    `If unsure, offer to escalate to customer service: sales@vividink.com.`,
+    `If unsure, offer to escalate to customer service: salesbr@poweredbyprisma.com.`,
   ].join("\n");
 }
 function escapeHtml(s: string) {
