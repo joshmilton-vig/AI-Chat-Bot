@@ -215,13 +215,71 @@ async function fetchJSON<T>(
 }
 
 // ---- Product intent detector ----
-function looksLikeProductQuery(text: string): boolean {
-  const q = text.toLowerCase();
+
+// NEW: greetings / chit-chat detector
+function isGreetingOrSmallTalk(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  const greetings = [
+    "hi",
+    "hello",
+    "hey",
+    "yo",
+    "sup",
+    "howdy",
+    "good morning",
+    "good afternoon",
+    "good evening",
+    "thanks",
+    "thank you",
+    "ok",
+    "okay",
+    "test",
+    "help",
+  ];
+  // exact match or startsWith common multi-word greetings
   return (
-    /product|price|sku|sign|banner|label|sticker|decal|yard|stake|flag|poster|magnet|vinyl|wrap|business card|brochure|flyer|shirt|apparel|embroidery/.test(
-      q
-    ) || /^[a-z0-9\-_]{4,}$/i.test(text)
+    greetings.includes(t) ||
+    greetings.some((g) => t.startsWith(g + " ")) ||
+    t.length <= 2 // super short messages like "yo", "ok"
   );
+}
+
+// Keywords-only product intent (no SKU heuristic)
+function looksLikeProductQuery(text: string): boolean {
+  const q = text.trim().toLowerCase();
+
+  // tune this list anytime — it's the only trigger now
+  const productKeywords = [
+    "product",
+    "price",
+    "sku",
+    "sign",
+    "banner",
+    "label",
+    "sticker",
+    "decal",
+    "yard",
+    "stake",
+    "flag",
+    "poster",
+    "magnet",
+    "vinyl",
+    "wrap",
+    "business card",
+    "brochure",
+    "flyer",
+    "shirt",
+    "apparel",
+    "embroidery",
+    "decoration",
+    "printing",
+    "yard sign",
+    "menu board",
+    "window cling",
+    "vehicle wrap",
+  ];
+
+  return productKeywords.some((k) => q.includes(k));
 }
 
 // ---- Widget ----
@@ -390,7 +448,13 @@ export function initChatWidget(userOpts: Options = {}) {
     showTyping();
 
     // --- Product search interception ---
-    if (productSearchEnabled && catalogSite && looksLikeProductQuery(text)) {
+    // NEW: skip if greeting/small-talk, and use stricter product intent
+    if (
+      productSearchEnabled &&
+      catalogSite &&
+      !isGreetingOrSmallTalk(text) && // NEW
+      looksLikeProductQuery(text) // CHANGED (stricter)
+    ) {
       try {
         const url = `${ASSISTANT_BASE}/api/products?site=${encodeURIComponent(
           catalogSite
@@ -668,8 +732,12 @@ function escapeHtml(s: string) {
   return s.replace(
     /[&<>"']/g,
     (m) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[
-        m
-      ]!)
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;",
+      }[m]!)
   );
 }
