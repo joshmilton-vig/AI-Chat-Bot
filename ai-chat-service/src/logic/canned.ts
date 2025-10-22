@@ -76,11 +76,19 @@ const RULES: Rule[] = [
   {
     name: "order_status",
     test: (t) =>
-      /\b(order|tracking|status|where.*(order|package)|track|shipment)\b/.test(
+      /\b(order|tracking|status|where.*(order|package)|track|shipment)\b/i.test(
         t
       ),
-    reply: () =>
-      "You can check your order status by logging in and clicking the **My Account** button in the top right menu, then choosing **View Orders**. If you can’t find your order, just let me know and I’ll point you in the right direction!",
+    reply: () => {
+      const host =
+        typeof window !== "undefined"
+          ? window.location.hostname
+          : "demo.vivid-think.com"; // fallback for server-side safety
+      const url = `https://${host}/account/orders.php`;
+      return `You can check your order status by logging in and clicking the **My Account** button in the top right menu, then choosing **View Orders**.  
+
+You can also go directly here: [View My Orders](${url})`;
+    },
   },
 ];
 
