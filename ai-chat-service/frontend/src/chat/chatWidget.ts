@@ -447,6 +447,30 @@ export function initChatWidget(userOpts: Options = {}) {
     sendBtn.disabled = true;
     showTyping();
 
+    // --- Hard bypass for greetings/small-talk ---
+    if (isGreetingOrSmallTalk(text)) {
+      try {
+        const reply = await sendChat(apiBase, business, messages);
+        hideTyping();
+        sendBtn.disabled = false;
+
+        messages.push({ role: "assistant", content: reply });
+        addAssistantMessageSmart(reply);
+        snapshot();
+        if (debug) console.log("[chat] greeting → LLM path");
+        return; // ← IMPORTANT: stop here so product search never runs
+      } catch (err: any) {
+        hideTyping();
+        sendBtn.disabled = false;
+        const m = `Hi! I’m the Prisma Assistant. I can help with store hours, returns, shipping, and orders. What do you need?`;
+        messages.push({ role: "assistant", content: m });
+        addAssistantMessageSmart(m);
+        snapshot();
+        if (debug) console.error(err);
+        return;
+      }
+    }
+
     // --- Product search interception ---
     // NEW: skip if greeting/small-talk, and use stricter product intent
     if (

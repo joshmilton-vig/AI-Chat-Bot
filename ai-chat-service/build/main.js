@@ -204,11 +204,36 @@ var VividAssistant = (() => {
     }
   }
   function me(t) {
-    let e = t.toLowerCase();
+    const e = t.trim().toLowerCase();
+    // word-boundary match; multi-word phrases ok
+    const pattern =
+      /\b(product|price|sku|sign|banner|label|sticker|decal|yard|stake|flag|poster|magnet|vinyl|wrap|business\ card|brochure|flyer|shirt|apparel|embroidery|decoration|printing|yard\ sign|menu\ board|window\ cling|vehicle\ wrap)\b/i;
+    return pattern.test(e);
+  }
+
+  function ye(t) {
+    const q = t.trim().toLowerCase();
+    const greetings = [
+      "hi",
+      "hello",
+      "hey",
+      "yo",
+      "sup",
+      "howdy",
+      "good morning",
+      "good afternoon",
+      "good evening",
+      "thanks",
+      "thank you",
+      "ok",
+      "okay",
+      "test",
+      "help",
+    ];
     return (
-      /product|price|sku|sign|banner|label|sticker|decal|yard|stake|flag|poster|magnet|vinyl|wrap|business card|brochure|flyer|shirt|apparel|embroidery/.test(
-        e
-      ) || /^[a-z0-9\-_]{4,}$/i.test(t)
+      greetings.includes(q) ||
+      greetings.some((g) => q.startsWith(g + " ")) ||
+      q.length <= 2
     );
   }
 
@@ -334,7 +359,7 @@ var VividAssistant = (() => {
           (w.value = ""),
           (g.disabled = !0),
           Z(),
-          z && T && me(n))
+          z && T && me(n) && !ye(n))
         )
           try {
             let a = `${K}/api/products?site=${encodeURIComponent(
