@@ -23,6 +23,37 @@ function hoursToHuman(biz: BusinessProfile) {
   return `Our hours (local time ${biz.timezone}):\n` + lines.join("\n");
 }
 
+/** Safely read the logged-in user name (DOM → localStorage fallback). */
+function getKnownUserName(): string | null {
+  try {
+    // Browser only
+    if (typeof window === "undefined" || typeof document === "undefined") {
+      return null;
+    }
+
+    // 1) Live DOM (e.g., `<td class="login loginWelcome"><span>Welcome, Josh Milton</span></td>`)
+    const el = document.querySelector(
+      ".loginWelcome span"
+    ) as HTMLElement | null;
+    const text = el?.textContent?.trim() || "";
+    const m = text.match(/Welcome,\s*(.+)/i);
+    if (m && m[1]) {
+      const name = m[1].trim();
+      // cache for later pages
+      try {
+        localStorage.setItem("vivid_chat_userName", name);
+      } catch {}
+      return name;
+    }
+
+    // 2) Cached
+    const cached = localStorage.getItem("vivid_chat_userName");
+    return cached || null;
+  } catch {
+    return null;
+  }
+}
+
 type Rule = {
   name: string;
   test: (text: string) => boolean;
@@ -36,18 +67,29 @@ const RULES: Rule[] = [
     test: (t) =>
       /^(hi|hello|hey|yo)\b/.test(t) ||
       /\b(good (morning|afternoon|evening))\b/.test(t),
-    reply: (biz) =>
-      `Hi! I’m the ${biz.name} Assistant. I can help with store hours, returns, shipping, and orders. What do you need?`,
+    reply: (biz) => {
+      const name = getKnownUserName();
+      const hello = name ? `Hi ${name}!` : "Hi!";
+      return `${hello} I’m the ${biz.name} Assistant. I can help with store hours, returns, shipping, and orders. What do you need?`;
+    },
   },
   {
     name: "thanks",
     test: (t) => /\b(thanks|thank you|ty|appreciate)\b/.test(t),
-    reply: () => "You’re welcome! Anything else I can help with?",
+    reply: () => {
+      const name = getKnownUserName();
+      return `You’re welcome${
+        name ? `, ${name}` : ""
+      }! Anything else I can help with?`;
+    },
   },
   {
     name: "goodbye",
     test: (t) => /\b(bye|goodbye|see ya|talk later|ttyl)\b/.test(t),
-    reply: () => "Thanks for visiting! Have a great day.",
+    reply: () => {
+      const name = getKnownUserName();
+      return `Thanks for visiting${name ? `, ${name}` : ""}! Have a great day.`;
+    },
   },
   {
     name: "hours",
