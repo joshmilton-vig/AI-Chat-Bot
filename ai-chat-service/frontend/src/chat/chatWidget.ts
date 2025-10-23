@@ -282,6 +282,37 @@ function looksLikeProductQuery(text: string): boolean {
   return productKeywords.some((k) => q.includes(k));
 }
 
+// ---- Logged-in name detection & persistence ----
+function getLoggedInUserNameFromDOM(): string | null {
+  // Targets: <td class="login loginWelcome"><span>Welcome, Josh Milton</span></td>
+  const el = document.querySelector(".loginWelcome span");
+  if (!el) return null;
+  const text = el.textContent?.trim() || "";
+  const m = text.match(/Welcome,\s*(.+)/i);
+  return m ? m[1].trim() : null;
+}
+function cacheUserName(name: string) {
+  try {
+    localStorage.setItem("vivid_chat_userName", name);
+  } catch {}
+}
+function readCachedUserName(): string | null {
+  try {
+    return localStorage.getItem("vivid_chat_userName");
+  } catch {
+    return null;
+  }
+}
+function detectUserName(): string | null {
+  const name = getLoggedInUserNameFromDOM();
+  if (name) {
+    cacheUserName(name);
+    return name;
+  }
+  return readCachedUserName();
+}
+let VIVID_USER_NAME: string | null = detectUserName();
+
 // ---- Widget ----
 export function initChatWidget(userOpts: Options = {}) {
   const opts: Options = {
@@ -393,11 +424,20 @@ export function initChatWidget(userOpts: Options = {}) {
   function setOpen(v: boolean) {
     open = v;
     panel.classList.toggle("open", open);
-    if (open && opts.welcomeMessage) {
-      const onceKey = "vivid_chat_welcome_shown";
-      if (!opts.welcomeOnce || !onceFlag(onceKey)) {
-        addMsg("assistant", opts.welcomeMessage);
-        if (opts.welcomeOnce) setOnceFlag(onceKey);
+    if (open) {
+      // Prefer explicit welcomeMessage; else personalize if we know a name.
+      const computedWelcome =
+        opts.welcomeMessage ||
+        (VIVID_USER_NAME
+          ? `Hey ${VIVID_USER_NAME}, how can I help today?`
+          : "");
+
+      if (computedWelcome) {
+        const onceKey = "vivid_chat_welcome_shown";
+        if (!opts.welcomeOnce || !onceFlag(onceKey)) {
+          addMsg("assistant", computedWelcome);
+          if (opts.welcomeOnce) setOnceFlag(onceKey);
+        }
       }
     }
   }
@@ -462,7 +502,9 @@ export function initChatWidget(userOpts: Options = {}) {
       } catch (err: any) {
         hideTyping();
         sendBtn.disabled = false;
-        const m = `Hi! I’m the Prisma Assistant. I can help with store hours, returns, shipping, and orders. What do you need?`;
+        const m = `Hi${
+          VIVID_USER_NAME ? ` ${VIVID_USER_NAME}` : ""
+        }! I’m the Prisma Assistant. I can help with store hours, returns, shipping, and orders. What do you need?`;
         messages.push({ role: "assistant", content: m });
         addAssistantMessageSmart(m);
         snapshot();
@@ -613,6 +655,7 @@ export function initChatWidget(userOpts: Options = {}) {
       productLimit,
       productSearchEnabled,
       options: opts,
+      userName: VIVID_USER_NAME || null,
     });
 
   // ---- Auto-open support ----
