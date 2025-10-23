@@ -82,6 +82,11 @@ var VividAssistant = (() => {
   }
   var VIVID_USER_NAME = __va_detectUserName();
 
+  // Ensure name detection runs after DOM is ready too
+  document.addEventListener("DOMContentLoaded", function () {
+    VIVID_USER_NAME = __va_detectUserName();
+  });
+
   function J() {
     let t = document.getElementById(V);
     return (
@@ -362,6 +367,9 @@ var VividAssistant = (() => {
       $ = n;
       v.classList.toggle("open", $);
       if ($) {
+        // Re-detect in case the DOM wasn't ready earlier
+        VIVID_USER_NAME = __va_detectUserName();
+
         var computedWelcome =
           e.welcomeMessage ||
           (VIVID_USER_NAME
@@ -457,25 +465,32 @@ var VividAssistant = (() => {
         // --- NEW: If it's a greeting, handle gracefully. On failure, send a friendly personalized greeting.
         if (ye(n)) {
           try {
+            // Send a quick local friendly greet first if we know the name
+            if (VIVID_USER_NAME) {
+              let friendlyGreet = "Hi " + VIVID_USER_NAME + "!";
+              l.push({ role: "assistant", content: friendlyGreet });
+              h("assistant", friendlyGreet);
+            }
+
             let a = await U(r, d, l);
-            S(),
-              (g.disabled = !1),
-              l.push({ role: "assistant", content: a }),
-              /<[a-z][\s\S]*>/i.test(a) ? R("assistant", a) : h("assistant", a),
-              x(),
-              ee("vivid_chat_message", { role: "assistant" });
+            S(), (g.disabled = !1);
+            l.push({ role: "assistant", content: a });
+            /<[a-z][\s\S]*>/i.test(a) ? R("assistant", a) : h("assistant", a);
+            x();
+            ee("vivid_chat_message", { role: "assistant" });
             return;
           } catch (a) {
             S(), (g.disabled = !1);
-            let friendly = `Hi${
-              VIVID_USER_NAME ? ` ${VIVID_USER_NAME}` : ""
-            }! I\u2019m the Prisma Assistant. I can help with store hours, returns, shipping, and orders. What do you need?`;
-            l.push({ role: "assistant", content: friendly }),
-              /<[a-z][\s\S]*>/i.test(friendly)
-                ? R("assistant", friendly)
-                : h("assistant", friendly),
-              x(),
-              m && console.error(a);
+            let friendly =
+              "Hi" +
+              (VIVID_USER_NAME ? " " + VIVID_USER_NAME : "") +
+              "! I\u2019m the Prisma Assistant. I can help with store hours, returns, shipping, and orders. What do you need?";
+            l.push({ role: "assistant", content: friendly });
+            /<[a-z][\s\S]*>/i.test(friendly)
+              ? R("assistant", friendly)
+              : h("assistant", friendly);
+            x();
+            m && console.error(a);
             return;
           }
         }
