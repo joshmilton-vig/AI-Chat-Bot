@@ -48,6 +48,40 @@ var VividAssistant = (() => {
     K = "https://ai-chat-bot-1xm4.onrender.com",
     N = null;
 
+  // ---- Logged-in name detection & persistence (NEW) ----
+  function __va_getUserNameFromDOM() {
+    try {
+      var el = document.querySelector(".loginWelcome span");
+      if (!el) return null;
+      var t = (el.textContent || "").trim();
+      var m = t.match(/Welcome,\s*(.+)/i);
+      return m ? m[1].trim() : null;
+    } catch {
+      return null;
+    }
+  }
+  function __va_cacheUserName(n) {
+    try {
+      localStorage.setItem("vivid_chat_userName", n);
+    } catch {}
+  }
+  function __va_readCachedUserName() {
+    try {
+      return localStorage.getItem("vivid_chat_userName");
+    } catch {
+      return null;
+    }
+  }
+  function __va_detectUserName() {
+    var n = __va_getUserNameFromDOM();
+    if (n) {
+      __va_cacheUserName(n);
+      return n;
+    }
+    return __va_readCachedUserName();
+  }
+  var VIVID_USER_NAME = __va_detectUserName();
+
   function J() {
     let t = document.getElementById(V);
     return (
@@ -322,13 +356,27 @@ var VividAssistant = (() => {
       C.appendChild(y),
       C.appendChild(v),
       X.appendChild(C);
+
+    // --- UPDATED: Personalized welcome on open
     function _(n) {
-      if ((($ = n), v.classList.toggle("open", $), $ && e.welcomeMessage)) {
-        let a = "vivid_chat_welcome_shown";
-        (!e.welcomeOnce || !F(a)) &&
-          (h("assistant", e.welcomeMessage), e.welcomeOnce && G(a));
+      $ = n;
+      v.classList.toggle("open", $);
+      if ($) {
+        var computedWelcome =
+          e.welcomeMessage ||
+          (VIVID_USER_NAME
+            ? "Hey " + VIVID_USER_NAME + ", how can I help today?"
+            : "");
+        if (computedWelcome) {
+          let a = "vivid_chat_welcome_shown";
+          if (!e.welcomeOnce || !F(a)) {
+            h("assistant", computedWelcome);
+            if (e.welcomeOnce) G(a);
+          }
+        }
       }
     }
+
     y.addEventListener("click", () => _(!$)),
       k.addEventListener("click", () => _(!1));
     let l = (e.persist && ue(E)) || [{ role: "system", content: ve(o, d) }];
@@ -405,6 +453,34 @@ var VividAssistant = (() => {
               x();
             return;
           }
+
+        // --- NEW: If it's a greeting, handle gracefully. On failure, send a friendly personalized greeting.
+        if (ye(n)) {
+          try {
+            let a = await U(r, d, l);
+            S(),
+              (g.disabled = !1),
+              l.push({ role: "assistant", content: a }),
+              /<[a-z][\s\S]*>/i.test(a) ? R("assistant", a) : h("assistant", a),
+              x(),
+              ee("vivid_chat_message", { role: "assistant" });
+            return;
+          } catch (a) {
+            S(), (g.disabled = !1);
+            let friendly = `Hi${
+              VIVID_USER_NAME ? ` ${VIVID_USER_NAME}` : ""
+            }! I\u2019m the Prisma Assistant. I can help with store hours, returns, shipping, and orders. What do you need?`;
+            l.push({ role: "assistant", content: friendly }),
+              /<[a-z][\s\S]*>/i.test(friendly)
+                ? R("assistant", friendly)
+                : h("assistant", friendly),
+              x(),
+              m && console.error(a);
+            return;
+          }
+        }
+
+        // --- Normal LLM flow ---
         try {
           let a = await U(r, d, l);
           S(),
@@ -460,6 +536,7 @@ var VividAssistant = (() => {
           productLimit: B,
           productSearchEnabled: z,
           options: e,
+          userName: VIVID_USER_NAME || null, // NEW
         }),
       typeof e.autoOpenDelay == "number")
     ) {
