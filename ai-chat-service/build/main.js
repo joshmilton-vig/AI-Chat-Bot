@@ -463,36 +463,20 @@ var VividAssistant = (() => {
           }
 
         // --- NEW: If it's a greeting, handle gracefully. On failure, send a friendly personalized greeting.
+        // --- Clean, single-line greeting (no LLM call for "hello"/"hi" etc.)
         if (ye(n)) {
-          try {
-            // Send a quick local friendly greet first if we know the name
-            if (VIVID_USER_NAME) {
-              let friendlyGreet = "Hi " + VIVID_USER_NAME + "!";
-              l.push({ role: "assistant", content: friendlyGreet });
-              h("assistant", friendlyGreet);
-            }
-
-            let a = await U(r, d, l);
-            S(), (g.disabled = !1);
-            l.push({ role: "assistant", content: a });
-            /<[a-z][\s\S]*>/i.test(a) ? R("assistant", a) : h("assistant", a);
-            x();
-            ee("vivid_chat_message", { role: "assistant" });
-            return;
-          } catch (a) {
-            S(), (g.disabled = !1);
-            let friendly =
-              "Hi" +
-              (VIVID_USER_NAME ? " " + VIVID_USER_NAME : "") +
-              "! I\u2019m the Prisma Assistant. I can help with store hours, returns, shipping, and orders. What do you need?";
-            l.push({ role: "assistant", content: friendly });
-            /<[a-z][\s\S]*>/i.test(friendly)
-              ? R("assistant", friendly)
-              : h("assistant", friendly);
-            x();
-            m && console.error(a);
-            return;
-          }
+          S(); // hide typing
+          g.disabled = false;
+          var msg = VIVID_USER_NAME
+            ? "Hi " + VIVID_USER_NAME + "\u2014how can I help today?"
+            : "Hi! How can I help today?";
+          l.push({ role: "assistant", content: msg });
+          /<[a-z][\s\S]*>/i.test(msg)
+            ? R("assistant", msg)
+            : h("assistant", msg);
+          x();
+          ee("vivid_chat_message", { role: "assistant", kind: "greeting" });
+          return;
         }
 
         // --- Normal LLM flow ---
